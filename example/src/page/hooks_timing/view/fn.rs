@@ -5,8 +5,7 @@ use std::time::Instant;
 pub(crate) fn page_hooks_timing(node: VirtualNode<PageHooksTimingProps>) -> VirtualNode {
     let PageHooksTimingProps: PageHooksTimingProps = node.try_get_props().unwrap_or_default();
     let debounced: DebouncedValue<String> = use_debounced_value::<String>(TIMING_DEBOUNCE_MS);
-    let throttled: ThrottledValue<String> =
-        use_throttled_value::<String>(TIMING_THROTTLE_MS);
+    let throttled: ThrottledValue<String> = use_throttled_value::<String>(TIMING_THROTTLE_MS);
     let previous: Previous<String> = use_previous::<String>();
     let current: Signal<String> = App::use_signal(String::new);
     let live: Signal<String> = App::use_signal(String::new);

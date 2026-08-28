@@ -49,9 +49,7 @@ pub(crate) fn hooks_protect_reset(boundary: ErrorBoundary) -> Option<Rc<dyn Fn(E
 
 /// Build a click handler that records a deliberately-slow
 /// measurement via the supplied profiler.
-pub(crate) fn hooks_protect_profile_slow(
-    profiler: ProfilerHandle,
-) -> Option<Rc<dyn Fn(Event)>> {
+pub(crate) fn hooks_protect_profile_slow(profiler: ProfilerHandle) -> Option<Rc<dyn Fn(Event)>> {
     Some(Rc::new(move |_: Event| {
         profiler.measure("slow-op", || {
             // Tight loop ~ 1 ms; sufficient to show non-zero
@@ -67,9 +65,7 @@ pub(crate) fn hooks_protect_profile_slow(
 
 /// Build a click handler that clears every recorded
 /// measurement.
-pub(crate) fn hooks_protect_profile_clear(
-    profiler: ProfilerHandle,
-) -> Option<Rc<dyn Fn(Event)>> {
+pub(crate) fn hooks_protect_profile_clear(profiler: ProfilerHandle) -> Option<Rc<dyn Fn(Event)>> {
     Some(Rc::new(move |_: Event| {
         profiler.clear();
     }))

@@ -27,7 +27,10 @@ pub(crate) fn interpolate(template: &str, vars: &HashMap<&'static str, &'static 
     let bytes: &[u8] = template.as_bytes();
     let mut cursor: usize = 0_usize;
     while cursor < bytes.len() {
-        if bytes[cursor] == b'{' && cursor + 1_usize < bytes.len() && bytes[cursor + 1_usize] != b'{' {
+        if bytes[cursor] == b'{'
+            && cursor + 1_usize < bytes.len()
+            && bytes[cursor + 1_usize] != b'{'
+        {
             // Look for the matching `}`.
             if let Some(close_rel) = template[cursor + 1_usize..].find('}') {
                 let close: usize = cursor + 1_usize + close_rel;
@@ -115,10 +118,6 @@ pub fn use_i18n(init_locale: &str) -> I18n {
 /// # Panics
 ///
 /// This function does not panic.
-pub fn i18n_register(
-    handle: I18n,
-    locale: &str,
-    entries: &[(&'static str, &'static str)],
-) {
+pub fn i18n_register(handle: I18n, locale: &str, entries: &[(&'static str, &'static str)]) {
     handle.add_messages(locale, entries);
 }

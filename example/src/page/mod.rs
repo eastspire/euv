@@ -1,7 +1,3 @@
-mod hooks_async;
-mod hooks_i18n;
-mod hooks_protect;
-mod hooks_timing;
 mod about;
 mod animation;
 mod r#async;
@@ -19,6 +15,10 @@ mod file;
 mod form;
 mod game_2d;
 mod game_3d;
+mod hooks_async;
+mod hooks_i18n;
+mod hooks_protect;
+mod hooks_timing;
 mod keep_alive;
 mod lifecycle;
 mod list;

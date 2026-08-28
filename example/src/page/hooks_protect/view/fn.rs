@@ -3,17 +3,13 @@ use super::*;
 /// A page demonstrating the "protective" hooks
 /// ([`ErrorBoundary`] and [`ProfilerHandle`]).
 #[component]
-pub(crate) fn page_hooks_protect(
-    node: VirtualNode<PageHooksProtectProps>,
-) -> VirtualNode {
-    let PageHooksProtectProps: PageHooksProtectProps =
-        node.try_get_props().unwrap_or_default();
+pub(crate) fn page_hooks_protect(node: VirtualNode<PageHooksProtectProps>) -> VirtualNode {
+    let PageHooksProtectProps: PageHooksProtectProps = node.try_get_props().unwrap_or_default();
     let boundary: ErrorBoundary = use_error_boundary();
     let profiler: ProfilerHandle = use_profiler();
-    let trigger_label: String = profiler_measure(
-        HOOKS_PROTECT_PROFILER_LABEL_TRIGGER,
-        || String::from(HOOKS_PROTECT_TRIGGER_RENDER_VALUE),
-    );
+    let trigger_label: String = profiler_measure(HOOKS_PROTECT_PROFILER_LABEL_TRIGGER, || {
+        String::from(HOOKS_PROTECT_TRIGGER_RENDER_VALUE)
+    });
     html! {
         div {
             class: c_page_container()
