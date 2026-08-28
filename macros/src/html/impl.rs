@@ -751,18 +751,21 @@ impl ToTokens for HtmlDynamicTag {
         let children: &[HtmlNode] = self.get_children();
         let attr_tokens: Vec<proc_macro2::TokenStream> = self.attribute_entry_tokens();
         let child_tokens: Vec<proc_macro2::TokenStream> = nodes_to_token_vec(children);
-        let component_registry: HashMap<String, ComponentInfo> = get_loaded_component_registry();
-        let component_match_arms: Vec<proc_macro2::TokenStream> = component_registry
-            .iter()
-            .map(|(fn_name, component_info): (&String, &ComponentInfo)| {
-                self.component_match_arm_tokens(
-                    fn_name,
-                    component_info,
-                    &attr_tokens,
-                    &child_tokens,
-                )
-            })
-            .collect();
+        let component_match_arms: Vec<proc_macro2::TokenStream> = with_loaded_component_registry(
+            |component_registry: &HashMap<String, ComponentInfo>| {
+                component_registry
+                    .iter()
+                    .map(|(fn_name, component_info): (&String, &ComponentInfo)| {
+                        self.component_match_arm_tokens(
+                            fn_name,
+                            component_info,
+                            &attr_tokens,
+                            &child_tokens,
+                        )
+                    })
+                    .collect()
+            },
+        );
         tokens.extend(quote! {
             ::euv::VirtualNode::create_dynamic(move |_: &mut ::euv::HookContext| {
                 let __euv_tag_name: String = (#tag_expr).to_string();
@@ -803,18 +806,34 @@ impl HtmlDynamicTag {
                 // braced key like `{key_signal.get()}` falls through to
                 // `Cow::Owned((...).to_string())` so the runtime attribute
                 // name tracks the current signal value.
-                let attr_name_token: proc_macro2::TokenStream = if is_static_attr_key_token(key) {
-                    let key_str: String = extract_attr_key_string(key);
+                //
+                // `extract_attr_key_string` (which walks the token stream
+                // and strips `r#` prefixes) is called exactly once per
+                // attribute below — the previous implementation called it
+                // twice (once for the dispatch and once for the
+                // special-key switch downstream), each time performing
+                // `key.to_string().replace(' ', "")` over the same token
+                // stream. On dense pages (~650 attributes / render) that
+                // double-walk dominates the macro's per-render time.
+                let static_key: bool = is_static_attr_key_token(key);
+                let key_str: String = if static_key {
+                    extract_attr_key_string(key)
+                } else {
+                    // `key_str` is only consulted to detect special keys
+                    // (`class`, `style`, `on*`, `children`, `inner_html`)
+                    // inside `attr_value_to_entry_value_tokens`; a dynamic
+                    // braced key cannot match any of those (none of them
+                    // start with `{`), so passing the empty fallback is
+                    // safe and saves the second `extract_attr_key_string`
+                    // walk in the common case where the user writes a
+                    // dynamic key with `{...}` braces.
+                    String::new()
+                };
+                let attr_name_token: proc_macro2::TokenStream = if static_key {
                     borrowed_attr_name_token(&key_str)
                 } else {
                     owned_attr_name_token(key)
                 };
-                // `key_str` is only consulted to detect special keys
-                // (`class`, `style`, `on*`, `children`, `inner_html`) inside
-                // `attr_value_to_entry_value_tokens`; a dynamic braced key
-                // cannot match any of those (none of them start with `{`), so
-                // passing the empty fallback is safe.
-                let key_str: String = extract_attr_key_string(key);
                 let ctx: AttrEntryContext<'_> = AttrEntryContext::new(value, &key_str);
                 let value_tokens: proc_macro2::TokenStream = attr_value_to_entry_value_tokens(&ctx);
                 quote! {
@@ -857,7 +876,7 @@ impl HtmlDynamicTag {
         let props_fields: &Vec<String> = component_info.get_props_fields();
         let props_field_types: &HashMap<String, String> = component_info.get_props_field_types();
         let prop_field_tokens: Vec<proc_macro2::TokenStream> =
-            self.dyn_prop_field_tokens(props_fields, props_field_types);
+            self.dyn_prop_field_tokens(props_fields, Some(props_field_types));
         let non_prop_attr_tokens: Vec<proc_macro2::TokenStream> =
             self.dyn_non_prop_attr_tokens(attr_tokens);
         let props_init_tokens: proc_macro2::TokenStream = if prop_field_tokens.is_empty() {
@@ -909,7 +928,7 @@ impl HtmlDynamicTag {
     fn dyn_prop_field_tokens(
         &self,
         props_fields: &[String],
-        props_field_types: &HashMap<String, String>,
+        props_field_types: Option<&HashMap<String, String>>,
     ) -> Vec<proc_macro2::TokenStream> {
         self.get_attributes()
             .iter()
@@ -1124,14 +1143,19 @@ impl HtmlElement {
     ) -> proc_macro2::TokenStream {
         let props_type_name: &str = get_user_fn_props_type(tag_name).unwrap_or(STR_EMPTY);
         let props_type_ident: Ident = Ident::new(props_type_name, tag_span);
-        let props_field_types: HashMap<String, String> = get_user_fn_props_field_types(tag_name)
-            .cloned()
-            .unwrap_or_default();
+        // `get_user_fn_props_field_types` already returns a borrowed
+        // `Option<&'static HashMap<...>>` whose lifetime is tied to the
+        // global registry; cloning it here would deep-copy every
+        // `field-name -> type-string` entry for every component element
+        // on every render. Pass the reference straight through.
+        let props_field_types: Option<&HashMap<String, String>> =
+            get_user_fn_props_field_types(tag_name);
         let prop_field_tokens: Vec<proc_macro2::TokenStream> =
-            self.prop_field_tokens(&props_field_types);
+            self.prop_field_tokens(props_field_types);
+        let expected_field_count: usize = props_field_types.map_or(0, |m: &HashMap<_, _>| m.len());
         let props_init_tokens: proc_macro2::TokenStream = if prop_field_tokens.is_empty() {
             quote! { #props_type_ident::default() }
-        } else if prop_field_tokens.len() == props_field_types.len() {
+        } else if prop_field_tokens.len() == expected_field_count {
             quote! { #props_type_ident { #(#prop_field_tokens), * } }
         } else {
             quote! { #props_type_ident { #(#prop_field_tokens), *, ..Default::default() } }
@@ -1161,7 +1185,7 @@ impl HtmlElement {
     /// - `Vec<proc_macro2::TokenStream>` - A `Vec<proc_macro2::TokenStream>` value.
     fn prop_field_tokens(
         &self,
-        props_field_types: &HashMap<String, String>,
+        props_field_types: Option<&HashMap<String, String>>,
     ) -> Vec<proc_macro2::TokenStream> {
         self.get_attributes()
             .iter()
@@ -1199,8 +1223,22 @@ impl HtmlElement {
                 // while a dynamic braced key like `{key_signal.get()}` falls
                 // through to `Cow::Owned((...).to_string())` so the runtime
                 // attribute name tracks the current signal value.
-                let key_string: String = extract_attr_key_string(key);
-                let attr_name_token: proc_macro2::TokenStream = if is_static_attr_key_token(key) {
+                //
+                // `is_static_attr_key_token` and `extract_attr_key_string`
+                // each walk the same token stream; the previous code called
+                // `extract_attr_key_string` unconditionally even on the
+                // dynamic-key path where the result is only used as a
+                // no-op-string equality check against known special keys
+                // (none of which start with `{`). Skip the second walk on
+                // the dynamic path — the comparison below would short-circuit
+                // either way.
+                let static_key: bool = is_static_attr_key_token(key);
+                let key_string: String = if static_key {
+                    extract_attr_key_string(key)
+                } else {
+                    String::new()
+                };
+                let attr_name_token: proc_macro2::TokenStream = if static_key {
                     borrowed_attr_name_token(&key_string)
                 } else {
                     owned_attr_name_token(key)

@@ -20,13 +20,17 @@ mod watch;
 pub(crate) use {class::*, computed::*, html::*, ident::*, raw_html::*, var::*, watch::*};
 
 use std::{
-    collections::HashMap,
-    env,
+    collections::{HashMap, hash_map::DefaultHasher},
+    env::{self, VarError},
     ffi::OsStr,
-    fs::{read_dir, read_to_string, write},
+    fmt::{self, Write as _},
+    fs::{create_dir_all, metadata, read_dir, read_to_string, write},
+    hash::{Hash, Hasher},
+    io,
     iter::Peekable,
     mem::MaybeUninit,
     path::PathBuf,
+    time::UNIX_EPOCH,
 };
 
 use {

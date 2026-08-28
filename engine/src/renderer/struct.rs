@@ -320,6 +320,33 @@ pub struct WebGpuRenderer {
     pub(crate) command_encoder: Option<JsValue>,
 }
 
+/// Describes a 2D viewport rectangle plus optional depth range, in the same
+/// pixel space as the destination render target.
+///
+/// Used by [`WebGpuRenderer::set_viewport`] (and any future caller that needs
+/// to push a `GpuViewport`-shaped JS object through `Reflect::set`). The
+/// depth-range fields are omitted from the `::new` constructor via
+/// `#[new(skip)]`; they default to zero-initialised `f32` and are typically
+/// overwritten by [`WebGpuRenderer::set_viewport`] to the WebGPU spec
+/// defaults of `0.0` / `1.0`.
+#[derive(Clone, Copy, Data, Debug, New, PartialEq)]
+pub struct ViewportDescriptor {
+    /// X coordinate of the viewport's top-left in pixels.
+    pub(crate) x: f32,
+    /// Y coordinate of the viewport's top-left in pixels.
+    pub(crate) y: f32,
+    /// Viewport width in pixels.
+    pub(crate) width: f32,
+    /// Viewport height in pixels.
+    pub(crate) height: f32,
+    /// Minimum depth, clamped to `[0, 1]`. Set to `0.0` to disable.
+    #[new(skip)]
+    pub(crate) min_depth: f32,
+    /// Maximum depth, clamped to `[0, 1]`. Set to `1.0` to disable.
+    #[new(skip)]
+    pub(crate) max_depth: f32,
+}
+
 /// A WebGL 2 rendering backend wrapping the `WebGl2RenderingContext`.
 ///
 /// Unlike `WebGpuRenderer`, which stores all GPU handles as opaque `JsValue`s,

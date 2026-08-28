@@ -121,19 +121,32 @@ pub(crate) fn set_user_fn_names(names: HashMap<String, ComponentInfo>) {
     }
 }
 
-/// Returns the already-loaded component registry without re-scanning the file system.
+/// Invokes `f` with a borrow of the loaded component registry, returning `f`'s
+/// result without cloning the registry.
 ///
-/// This is used by `HtmlDynamicTag::to_tokens` to avoid calling `load_component_registry`
-/// again, since the registry has already been populated by `parse_html` before
-/// token generation begins.
+/// This is the preferred accessor for render-time callers such as
+/// `HtmlDynamicTag::to_tokens`.
+///
+/// The registry lives in `static` storage for the duration of the
+/// `html!` expansion, so the returned reference is valid for as long as
+/// the borrow on `with_loaded_component_registry` lasts. The closure
+/// must not outlive its own call frame.
+///
+/// # Arguments
+///
+/// - `F` - The closure to invoke with the borrowed registry. Any return
+///   value is forwarded back to the caller.
 ///
 /// # Returns
 ///
-/// - `HashMap<String, ComponentInfo>` - The loaded component registry.
-pub(crate) fn get_loaded_component_registry() -> HashMap<String, ComponentInfo> {
+/// - `R` - Whatever `f` returns.
+pub(crate) fn with_loaded_component_registry<F, R>(f: F) -> R
+where
+    F: FnOnce(&HashMap<String, ComponentInfo>) -> R,
+{
     unsafe {
         let pointer: *const MaybeUninit<HashMap<String, ComponentInfo>> = &raw const USER_FN_NAMES;
-        (*pointer).assume_init_ref().clone()
+        f((*pointer).assume_init_ref())
     }
 }
 
@@ -277,14 +290,13 @@ pub(crate) fn load_component_registry() -> HashMap<String, ComponentInfo> {
     let cache_dir: PathBuf =
         env::var(ENV_OUT_DIR)
             .map(PathBuf::from)
-            .unwrap_or_else(|_: std::env::VarError| {
-                let mut hasher: std::collections::hash_map::DefaultHasher =
-                    std::collections::hash_map::DefaultHasher::new();
-                std::hash::Hash::hash(&manifest_dir, &mut hasher);
-                let hash: u64 = std::hash::Hasher::finish(&hasher);
-                std::env::temp_dir().join(format!("euv_registry_{hash:x}"))
+            .unwrap_or_else(|_: VarError| {
+                let mut hasher: DefaultHasher = DefaultHasher::new();
+                Hash::hash(&manifest_dir, &mut hasher);
+                let hash: u64 = Hasher::finish(&hasher);
+                env::temp_dir().join(format!("euv_registry_{hash:x}"))
             });
-    let _: std::io::Result<()> = std::fs::create_dir_all(&cache_dir);
+    let _: io::Result<()> = create_dir_all(&cache_dir);
     let cache_path: PathBuf = cache_dir.join(REGISTRY_CACHE_FILE_NAME);
     if let Some(cached) = try_load_cache(&cache_path, &fingerprint) {
         return cached;
@@ -306,19 +318,31 @@ pub(crate) fn load_component_registry() -> HashMap<String, ComponentInfo> {
 ///
 /// - `String` - The computed fingerprint string.
 fn compute_fingerprint(files: &[PathBuf]) -> String {
-    let mut fingerprint: String = String::new();
+    // Each file contributes roughly `path.len() + 24` bytes to the
+    // fingerprint (the path's `to_string_lossy()` plus a `;` delimiter
+    // and the millisecond timestamp plus its own `;`). Pre-sizing the
+    // buffer avoids the ~O(N) reallocations that the default-growth
+    // path incurs while scanning a workspace's full `src/` tree.
+    const APPROX_BYTES_PER_FILE: usize = 96;
     let mut sorted_files: Vec<&PathBuf> = files.iter().collect();
     sorted_files.sort();
+    let mut fingerprint: String = String::with_capacity(sorted_files.len() * APPROX_BYTES_PER_FILE);
     for path in sorted_files {
         fingerprint.push_str(&path.to_string_lossy());
         fingerprint.push(CHAR_SEMICOLON);
-        if let Ok(metadata) = std::fs::metadata(path)
+        if let Ok(metadata) = metadata(path)
             && let Ok(modified) = metadata.modified()
-            && let Ok(duration) = modified.duration_since(std::time::UNIX_EPOCH)
+            && let Ok(duration) = modified.duration_since(UNIX_EPOCH)
         {
-            fingerprint.push_str(&duration.as_millis().to_string());
+            // `u128::from(duration.as_millis())` is at most 13 decimal
+            // digits; writing into the String directly via `write!`
+            // avoids the intermediate `String` allocation that
+            // `as_millis().to_string()` performs before pushing onto
+            // the parent String.
+            let _: fmt::Result = write!(&mut fingerprint, "{};", duration.as_millis());
+        } else {
+            fingerprint.push(CHAR_SEMICOLON);
         }
-        fingerprint.push(CHAR_SEMICOLON);
     }
     fingerprint
 }
@@ -366,7 +390,7 @@ fn try_save_cache(
 ) {
     if let Ok(data) = serde_json::to_string(registry) {
         let content: String = format!("{fingerprint}{CHAR_NEWLINE}{data}");
-        let _: std::io::Result<()> = write(cache_path, content);
+        let _: io::Result<()> = write(cache_path, content);
     }
 }
 
@@ -482,17 +506,17 @@ fn collect_registry_dep_src_dirs(dep_names: &[String]) -> Vec<PathBuf> {
     let cargo_home: PathBuf =
         env::var(CARGO_HOME_ENV)
             .map(PathBuf::from)
-            .unwrap_or_else(|_: std::env::VarError| {
+            .unwrap_or_else(|_: VarError| {
                 env::var(HOME_ENV)
                     .map(|home: String| PathBuf::from(home).join(CARGO_DIR))
                     .unwrap_or_default()
             });
     let registry_src: PathBuf = cargo_home.join(REGISTRY_DIR).join(REGISTRY_SRC_DIR);
-    let Ok(registry_entries) = std::fs::read_dir(&registry_src) else {
+    let Ok(registry_entries) = read_dir(&registry_src) else {
         return dep_dirs;
     };
     for registry_entry in registry_entries.flatten() {
-        let Ok(package_entries) = std::fs::read_dir(registry_entry.path()) else {
+        let Ok(package_entries) = read_dir(registry_entry.path()) else {
             continue;
         };
         for package_entry in package_entries.flatten() {
@@ -1948,6 +1972,12 @@ pub(crate) fn extract_attr_key_tokens(key: &proc_macro2::TokenStream) -> proc_ma
 pub(crate) fn is_static_attr_key_token(key: &proc_macro2::TokenStream) -> bool {
     use proc_macro2::TokenTree;
     let mut has_token: bool = false;
+    // `proc_macro2::TokenStream` only implements `IntoIterator` by value
+    // (not by reference), so iterating without `clone()` is impossible at
+    // the API level. On the proc-macro host (wasm32 or compile-time
+    // evaluation under rustc) the inner `proc_macro::TokenStream` is an
+    // `Arc`-backed structure, so `clone()` is cheap. The clone below is
+    // therefore equivalent in cost to a shallow Arc bump.
     for token in key.clone() {
         has_token = true;
         match token {
@@ -2074,7 +2104,9 @@ pub(crate) fn attr_value_to_entry_value_tokens(
 /// - `&Ident` - Shared reference to a `Ident`.
 /// - `&str` - Shared reference to a `str`.
 /// - `&HtmlAttrValue` - Shared reference to a `HtmlAttrValue`.
-/// - `&HashMap<String, String>` - Shared reference to a `HashMap<String, String>`.
+/// - `Option<&HashMap<String, String>>` - Optional borrowed view of the
+///   field-type map; `None` means the caller has no component-registry
+///   context available (dynamic-tag path).
 ///
 /// # Returns
 ///
@@ -2083,7 +2115,7 @@ pub(crate) fn prop_field_token(
     field_ident: &Ident,
     key_string: &str,
     value: &HtmlAttrValue,
-    props_field_types: &HashMap<String, String>,
+    props_field_types: Option<&HashMap<String, String>>,
 ) -> proc_macro2::TokenStream {
     match value {
         HtmlAttrValue::Expr(expr) => {
@@ -2091,7 +2123,7 @@ pub(crate) fn prop_field_token(
         }
         HtmlAttrValue::If(html_attr_if) => {
             let else_default: proc_macro2::TokenStream = match props_field_types
-                .get(key_string)
+                .and_then(|m: &HashMap<_, _>| m.get(key_string))
                 .map(|field_type: &String| field_type.as_str())
             {
                 Some(TYPE_VIRTUAL_NODE) => quote! { ::euv::VirtualNode::Empty },

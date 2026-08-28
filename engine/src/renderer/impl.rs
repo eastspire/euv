@@ -4152,53 +4152,38 @@ impl WebGpuRenderer {
     /// # Arguments
     ///
     /// - `&JsValue` - The active `GpuRenderPassEncoder`.
-    /// - `f32` - X coordinate of the viewport's top-left in pixels.
-    /// - `f32` - Y coordinate of the viewport's top-left in pixels.
-    /// - `f32` - Viewport width in pixels.
-    /// - `f32` - Viewport height in pixels.
-    /// - `f32` - Minimum depth, clamped to `[0, 1]`. Pass `0.0` to disable.
-    /// - `f32` - Maximum depth, clamped to `[0, 1]`. Pass `1.0` to disable.
-    #[allow(clippy::too_many_arguments)]
-    pub fn set_viewport(
-        &self,
-        pass: &JsValue,
-        x: f32,
-        y: f32,
-        width: f32,
-        height: f32,
-        min_depth: f32,
-        max_depth: f32,
-    ) {
+    /// - `&ViewportDescriptor` - The viewport rectangle and (optional) depth range.
+    pub fn set_viewport(&self, pass: &JsValue, viewport: &ViewportDescriptor) {
         let vp_dict: Object = Object::new();
         let _ = Reflect::set(
             &vp_dict,
             &JsValue::from_str(WEBGPU_PROPERTY_X),
-            &JsValue::from_f64(x as f64),
+            &JsValue::from_f64(*viewport.get_x() as f64),
         );
         let _ = Reflect::set(
             &vp_dict,
             &JsValue::from_str(WEBGPU_PROPERTY_Y),
-            &JsValue::from_f64(y as f64),
+            &JsValue::from_f64(*viewport.get_y() as f64),
         );
         let _ = Reflect::set(
             &vp_dict,
             &JsValue::from_str(WEBGPU_PROPERTY_WIDTH),
-            &JsValue::from_f64(width as f64),
+            &JsValue::from_f64(*viewport.get_width() as f64),
         );
         let _ = Reflect::set(
             &vp_dict,
             &JsValue::from_str(WEBGPU_PROPERTY_HEIGHT),
-            &JsValue::from_f64(height as f64),
+            &JsValue::from_f64(*viewport.get_height() as f64),
         );
         let _ = Reflect::set(
             &vp_dict,
             &JsValue::from_str(WEBGPU_PROPERTY_MIN_DEPTH),
-            &JsValue::from_f64(min_depth as f64),
+            &JsValue::from_f64(WEBGPU_DEFAULT_VIEWPORT_MIN_DEPTH),
         );
         let _ = Reflect::set(
             &vp_dict,
             &JsValue::from_str(WEBGPU_PROPERTY_MAX_DEPTH),
-            &JsValue::from_f64(max_depth as f64),
+            &JsValue::from_f64(WEBGPU_DEFAULT_VIEWPORT_MAX_DEPTH),
         );
         let vp_js: JsValue = vp_dict.unchecked_into::<JsValue>();
         if let Ok(set_fn) = Reflect::get(pass, &JsValue::from_str(WEBGPU_METHOD_SET_VIEWPORT))

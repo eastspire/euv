@@ -2,8 +2,7 @@ use super::*;
 
 #[test]
 fn set_viewport_signature_pinned() {
-    let _: fn(&WebGpuRenderer, &JsValue, f32, f32, f32, f32, f32, f32) =
-        WebGpuRenderer::set_viewport;
+    let _: fn(&WebGpuRenderer, &JsValue, &ViewportDescriptor) = WebGpuRenderer::set_viewport;
 }
 
 #[test]
