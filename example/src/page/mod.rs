@@ -1,6 +1,5 @@
 mod about;
 mod animation;
-mod r#async;
 mod attrs;
 mod badge;
 mod binding;
@@ -33,11 +32,11 @@ mod webgpu_status;
 mod websocket;
 
 pub(crate) use {
-    about::*, animation::*, r#async::*, attrs::*, badge::*, binding::*, browser::*, camera::*,
-    canvas::*, conditional::*, counter::*, dynamic::*, event::*, file::*, form::*, game_2d::*,
-    game_3d::*, hooks_async::*, hooks_i18n::*, hooks_protect::*, hooks_timing::*, keep_alive::*,
-    lifecycle::*, list::*, modal::*, not_found::*, observer::*, select::*, sse::*, timer::*,
-    virtual_list::*, webgpu_status::*, websocket::*,
+    about::*, animation::*, attrs::*, badge::*, binding::*, browser::*, camera::*, canvas::*,
+    conditional::*, counter::*, dynamic::*, event::*, file::*, form::*, game_2d::*, game_3d::*,
+    hooks_async::*, hooks_i18n::*, hooks_protect::*, hooks_timing::*, keep_alive::*, lifecycle::*,
+    list::*, modal::*, not_found::*, observer::*, select::*, sse::*, timer::*, virtual_list::*,
+    webgpu_status::*, websocket::*,
 };
 
 use super::*;

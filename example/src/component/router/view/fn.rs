@@ -26,9 +26,6 @@ pub(crate) fn page_router(node: VirtualNode<PageRouterProps>) -> VirtualNode {
                 "/animation" => {
                     page_animation {}
                 }
-                "/async" => {
-                    page_async_demo {}
-                }
                 "/custom-attrs" => {
                     page_custom_attrs {}
                 }

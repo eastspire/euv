@@ -1465,7 +1465,7 @@ class! {
 
     pub c_role_button_row {
         display: "flex";
-        flex-wrap: "wrap";
+        flex-wrap: "nowrap";
         gap: var!(gap-element);
         margin-bottom: var!(gap-component);
     }
@@ -2715,6 +2715,28 @@ class! {
     pub c_binding_color_mixer {
         margin-top: var!(gap-component);
     }
+
+    pub c_binding_live_color_row {
+        display: "flex";
+        align-items: "center";
+        gap: var!(gap-element);
+        margin-top: var!(gap-component);
+    }
+
+    pub c_binding_live_color_swatch {
+        width: "80px";
+        height: "42px";
+        border-radius: "6px";
+        border: format!("1px solid {}", var!(border));
+        flex: "0 0 auto";
+    }
+
+    pub c_binding_live_color_button(background: &str) {
+        background: {
+            background
+        };
+    }
+
 
     pub c_binding_color_preview {
         width: "100%";
