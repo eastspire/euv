@@ -1,5 +1,6 @@
 use super::*;
 
+/// Inherent implementation of [`ThrottledValue`].
 impl<T: Clone + PartialEq + Default + 'static> ThrottledValue<T> {
     /// Sends `next` through the throttle.
     ///
@@ -107,6 +108,7 @@ impl<T: Clone + PartialEq + Default + 'static> ThrottledValue<T> {
     }
 }
 
+/// Debug formatting for [`ThrottledValue`].
 impl<T: Clone + PartialEq + Debug + Default + 'static> Display for ThrottledValue<T> {
     /// Formats the [`ThrottledValue`] via the supplied formatter.
     ///

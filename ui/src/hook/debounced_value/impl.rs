@@ -1,5 +1,6 @@
 use super::*;
 
+/// Inherent implementation of [`DebouncedValue`].
 impl<T: Clone + PartialEq + Default + 'static> DebouncedValue<T> {
     /// Schedules `next` to become the emitted value. The
     /// commit happens on the next `tick` call at or after
@@ -81,6 +82,7 @@ impl<T: Clone + PartialEq + Default + 'static> DebouncedValue<T> {
     }
 }
 
+/// Debug formatting for [`DebouncedValue`].
 impl<T: Clone + PartialEq + Debug + Default + 'static> Display for DebouncedValue<T> {
     /// Formats the [`DebouncedValue`] via the supplied formatter.
     ///

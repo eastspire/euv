@@ -1,5 +1,6 @@
 use super::*;
 
+/// Inherent implementation of [`Previous`].
 impl<T: Clone + PartialEq + 'static> Previous<T> {
     /// Creates a new `Previous` with no recorded value.
     /// The `previous` signal starts at `None`.
@@ -40,6 +41,7 @@ impl<T: Clone + PartialEq + 'static> Previous<T> {
     }
 }
 
+/// Debug formatting for [`Previous`].
 impl<T: Clone + PartialEq + Debug + 'static> Display for Previous<T> {
     /// Formats the [`Previous`] via the supplied formatter.
     ///
@@ -58,6 +60,7 @@ impl<T: Clone + PartialEq + Debug + 'static> Display for Previous<T> {
     }
 }
 
+/// Default-construction for [`Previous`].
 impl<T: Clone + PartialEq + 'static> Default for Previous<T> {
     /// Constructs a default [`Previous`] value.
     fn default() -> Self {

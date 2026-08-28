@@ -1,5 +1,6 @@
 use super::*;
 
+/// Hook-context teardown for [`UseAsyncSlot`].
 impl<T, L> Drop for UseAsyncSlot<T, L>
 where
     T: Clone + PartialEq + 'static,
@@ -17,6 +18,7 @@ where
     }
 }
 
+/// Inherent implementation of [`UseAsyncHandle`] — slot lifecycle internals.
 impl<T, L> UseAsyncHandle<T, L>
 where
     T: Clone + PartialEq + 'static,
@@ -58,6 +60,7 @@ where
     }
 }
 
+/// Inherent implementation of [`UseAsyncHandle`] — public reactive API.
 impl<T, L> UseAsyncHandle<T, L>
 where
     T: Clone + PartialEq + 'static,
@@ -152,6 +155,7 @@ impl HasLoadingHint for () {
     fn empty() -> Self {}
 }
 
+/// Debug formatting for [`UseAsyncHandle`].
 impl<T, L> core::fmt::Debug for UseAsyncHandle<T, L>
 where
     T: Clone + PartialEq + 'static,
@@ -176,6 +180,7 @@ where
     }
 }
 
+/// Default-construction for [`UseAsyncHandle`].
 impl<T, L> Default for UseAsyncHandle<T, L>
 where
     T: Clone + PartialEq + 'static,
