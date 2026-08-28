@@ -1,4 +1,5 @@
-/// Navigation item tuple: (icon, label, target).
+/// Static navigation route targets — every page in the
+/// demo registers here so the sidebar can iterate.
 pub(crate) const NAV_ITEMS: &[(&str, &str, &str)] = &[
     ("ℹ️", "About", "/"),
     ("🎬", "Animation", "/animation"),
@@ -14,6 +15,10 @@ pub(crate) const NAV_ITEMS: &[(&str, &str, &str)] = &[
     ("🏷️", "DynTag", "/dynamic-component"),
     ("🎯", "Event", "/event"),
     ("📄", "Form", "/form"),
+    ("⏲️", "Timing", "/hooks-timing"),
+    ("🌐", "Async", "/hooks-async"),
+    ("🛡️", "Protect", "/hooks-protect"),
+    ("🌍", "i18n", "/hooks-i18n"),
     ("🎮", "Game2D", "/game-2d"),
     ("🎲", "Game3D", "/game-3d"),
     ("💚", "KeepAlive", "/keep-alive"),

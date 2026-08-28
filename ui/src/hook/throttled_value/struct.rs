@@ -23,6 +23,7 @@ pub struct ThrottledValue<T: Clone + PartialEq + Default + 'static> {
     /// `Signal::create(T::default())` via
     /// `#[new(skip)]`.
     #[new(skip)]
+    #[get(type(copy))]
     pub(crate) value: Signal<T>,
     /// The latest input waiting for the next commit.
     /// Defaults to `Signal::create(None)` via
@@ -37,3 +38,8 @@ pub struct ThrottledValue<T: Clone + PartialEq + Default + 'static> {
     /// The throttle window in milliseconds.
     pub(crate) interval_ms: u32,
 }
+
+/// `ThrottledValue<T>` is `Copy` when `T` is — every field
+/// is itself `Copy` (`Signal<T>`, `Signal<Option<T>>`, `u32`)
+/// or a simple `enum`, so the blanket impl is sound.
+impl<T> Copy for ThrottledValue<T> where T: Clone + PartialEq + Default + 'static {}

@@ -71,6 +71,11 @@ pub struct ProfilerHandle {
     pub(crate) entries: Signal<Vec<ProfileEntry>>,
 }
 
+/// `ProfilerHandle` is `Copy` because `Signal<Vec<ProfileEntry>>`
+/// is itself `Copy` (the registry hands out cheap `usize`
+/// addresses; the vector lives in the global signal store).
+impl Copy for ProfilerHandle {}
+
 /// A `begin()` marker — RAII guard that records the start
 /// timestamp and the label so the matching `end()` call can
 /// compute the elapsed time.

@@ -42,6 +42,32 @@ impl ErrorBoundary {
         }
     }
 
+    /// Feeds an `Err` straight into the boundary
+    /// without forcing the caller to `panic!`.
+    ///
+    /// `try_with` requires a real panic to transition
+    /// the phase to `Caught`, which makes demonstrating
+    /// the hook from outside `tests/` awkward. This
+    /// helper lets demo / driver code report a failure
+    /// message via the regular `Result` channel and
+    /// still flip the boundary into `Caught`.
+    ///
+    /// # Arguments
+    ///
+    /// - `&str` - The error message to surface.
+    ///
+    /// # Returns
+    ///
+    /// - `String` - The same message that was passed in.
+    pub fn report_error(&self, message: &str) -> String {
+        let owned: String = String::from(message);
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            self.get_phase()
+                .set(ErrorBoundaryPhase::Caught(owned.clone()));
+        }));
+        owned
+    }
+
     /// Transitions the boundary back to `Healthy`.
     /// Useful when invalidating the cache (e.g.,
     /// after a retry).

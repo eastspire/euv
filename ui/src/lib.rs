@@ -18,7 +18,6 @@ use std::{
     ops::Deref,
     panic::{AssertUnwindSafe, UnwindSafe, catch_unwind},
     rc::Rc,
-    str::Chars,
     sync::{
         LazyLock,
         atomic::{AtomicBool, Ordering},
