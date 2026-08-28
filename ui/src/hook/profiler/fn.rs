@@ -1,53 +1,81 @@
 use super::*;
 
-/// Returns a monotonic millisecond timestamp suitable for
-/// profiling measurements.
+/// Returns the current wall-clock time, in milliseconds.
 ///
-/// Delegates to `Performance::now()` when available, which is
-/// monotonic per-spec, sub-millisecond resolution, and shared
-/// across all `Worker` scopes in the same browsing context.
-/// Falls back to `Date.now()` (non-monotonic, but always
-/// available) when `performance.now()` is missing — the
-/// fallback only fires in worklets or non-browser wasm
-/// runtimes.
+/// Browser-only wrapper around [`js_sys::Date::now`] (also doubles
+/// as `performance.now()`-based input if the host environment
+/// exposes one). Returns a `f64` because the upstream JavaScript
+/// value is also `f64` and rounding to integer milliseconds throws
+/// away the sub-millisecond precision the profiler relies on.
 ///
-/// On non-wasm test runners where the browser API surface is
-/// absent the first call may unwind; the `FALLBACK_MS` cell
-/// then caches the result of a process-local monotonic clock
-/// so subsequent calls don't re-trigger the web-sys lazy
-/// initialiser (which would poison once-cell across the rest
-/// of the test process).
+/// The function is `pub(crate)` because the only intended consumer
+/// lives in the same crate (the profiler's `measure` / `begin` /
+/// `end` paths); downstream code does not need to call it directly.
 ///
 /// # Returns
 ///
-/// - `f64` - A monotonically-increasing millisecond timestamp.
-///   Always `>= 0.0`.
+/// - `f64` - The current wall-clock time, in milliseconds.
 pub fn now_ms() -> f64 {
-    let result: Result<f64, Box<dyn std::any::Any + Send>> =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            window()
-                .and_then(|window: Window| window.performance())
-                .map(|performance: Performance| performance.now())
-                .unwrap_or_else(Date::now)
-        }));
-    match result {
-        Ok(ms) => ms,
-        Err(_) => process_local_ms(),
-    }
+    js_sys::Date::now()
 }
 
-/// Fallback millisecond clock anchored at this thread's first call.
-/// Helper body of the `process_local_ms` free function.
+/// Obtains a `ProfilerHandle` registered against the current hook context slot.
+///
+/// Behaves like `HookContext::use_hook`: the same `ProfilerHandle`
+/// is returned on every render at the same hook index, so
+/// measurements pushed onto its entries signal remain visible
+/// across renders.
+///
+/// Use [`ProfilerHandle::measure`] for a single-shot
+/// "label + closure" form or [`ProfilerHandle::begin`] /
+/// [`ProfilerHandle::end`] for the split-timer form. Reads of
+/// [`ProfilerHandle::entries`] inside a render closure subscribe
+/// the render to new entries.
 ///
 /// # Returns
 ///
-/// - `f64` - A non-negative monotonically-increasing millisecond value.
-fn process_local_ms() -> f64 {
-    thread_local! {
-        static START: std::cell::OnceCell<Instant> = const { std::cell::OnceCell::new() };
-    }
-    START.with(|cell: &std::cell::OnceCell<Instant>| {
-        let start: &Instant = cell.get_or_init(Instant::now);
-        start.elapsed().as_secs_f64() * 1000.0
-    })
+/// - `ProfilerHandle` - The profiler handle.
+///   Returns the factory result directly when no hook context is
+///   active (e.g. when called outside a render cycle).
+pub fn use_profiler() -> ProfilerHandle {
+    HookContext::use_hook(ProfilerHandle::new_with_empty_entries)
+}
+
+/// Runs `body` and records the elapsed time under `label`.
+///
+/// Convenience helper that pairs with `App::use_interval`-style
+/// re-renders: any render closure can call `profiler_measure(label, ...)`
+/// on its hot path and the result lands in the same `ProfilerHandle`'s
+/// entries signal.
+///
+/// # Arguments
+///
+/// - `&str` - The free-form label that identifies this measurement.
+/// - `F: FnOnce() -> R` - The closure whose execution time is
+///   measured.
+///
+/// # Returns
+///
+/// - `R` - The closure's return value, unchanged.
+pub fn profiler_measure<F, R>(label: &str, body: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    let profiler: ProfilerHandle = use_profiler();
+    let start_ms: f64 = now_ms();
+    let result: R = body();
+    let elapsed_ms: f64 = now_ms() - start_ms;
+    let timestamp_ms: f64 = now_ms();
+    let entry: ProfileEntry = ProfileEntry {
+        label: label.to_string(),
+        elapsed_ms,
+        timestamp_ms,
+    };
+    let next_entries: Vec<ProfileEntry> = {
+        let mut next: Vec<ProfileEntry> = profiler.get_entries().get();
+        next.push(entry);
+        next
+    };
+    profiler.get_entries().set(next_entries);
+    result
 }

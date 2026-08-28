@@ -16,7 +16,7 @@ use super::*;
 /// Cloning a handle is cheap — `UseAsyncHandle` is `Copy` if its
 /// generic parameters are. Use it from event handlers the same way
 /// you'd use a `Signal<T>`.
-#[derive(Clone, Copy, Data)]
+#[derive(Clone, Data)]
 pub struct UseAsyncHandle<T, L>
 where
     T: Clone + PartialEq + 'static,
@@ -26,6 +26,17 @@ where
     pub(crate) inner: usize,
     /// `Copy` marker so `UseAsyncHandle` itself is `Copy`.
     pub(crate) _marker: core::marker::PhantomData<fn() -> (T, L)>,
+}
+
+/// Blanket `Copy` for any generic instance — both fields are
+/// themselves `Copy` (`usize`, `PhantomData<fn pointer>`).
+/// The `where` clause must be repeated because a separate impl
+/// block cannot inherit bounds from the type declaration.
+impl<T, L> core::marker::Copy for UseAsyncHandle<T, L>
+where
+    T: Clone + PartialEq + 'static,
+    L: Clone + PartialEq + HasLoadingHint + 'static,
+{
 }
 
 /// Heap-allocated state backing a [`super::UseAsyncHandle`].

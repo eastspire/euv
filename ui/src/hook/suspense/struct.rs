@@ -13,3 +13,8 @@ pub struct SuspenseHandle<T: Clone + PartialEq + 'static> {
     /// The phase signal.
     pub(crate) phase: Signal<SuspensePhase<T>>,
 }
+
+/// `SuspenseHandle<T>` is `Copy` when `T` is — `Signal<...>` is
+/// `Copy` for any `T: Clone + PartialEq + 'static`, so this
+/// blanket impl is sound.
+impl<T> Copy for SuspenseHandle<T> where T: Clone + PartialEq + 'static {}

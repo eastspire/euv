@@ -62,6 +62,18 @@ pub(crate) fn page_router(node: VirtualNode<PageRouterProps>) -> VirtualNode {
                 "/form" => {
                     page_form {}
                 }
+                "/hooks-timing" => {
+                    page_hooks_timing {}
+                }
+                "/hooks-async" => {
+                    page_hooks_async {}
+                }
+                "/hooks-protect" => {
+                    page_hooks_protect {}
+                }
+                "/hooks-i18n" => {
+                    page_hooks_i18n {}
+                }
                 "/game-2d" => {
                     page_game_2d {}
                 }

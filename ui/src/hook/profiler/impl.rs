@@ -2,6 +2,24 @@ use super::*;
 
 /// Inherent implementation of [`ProfilerHandle`].
 impl ProfilerHandle {
+    /// Constructs a `ProfilerHandle` with an empty entries log.
+    ///
+    /// Lombok `New` cannot derive this for us because the
+    /// `entries` field is a `Signal<...>` rather than a plain
+    /// value — we cannot synthesise a meaningful default at
+    /// compile time, so the hook-context factory wires one up at
+    /// runtime via `Signal::create(Vec::new())`.
+    ///
+    /// # Returns
+    ///
+    /// - `ProfilerHandle` - A profiler handle with no recorded
+    ///   measurements.
+    pub fn new_with_empty_entries() -> Self {
+        Self {
+            entries: Signal::create(Vec::new()),
+        }
+    }
+
     /// Records a fresh measurement around the given closure.
     ///
     /// Captures the start timestamp, runs `f`, captures the

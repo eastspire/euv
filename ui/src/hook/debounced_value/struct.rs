@@ -25,6 +25,7 @@ pub struct DebouncedValue<T: Clone + PartialEq + Default + 'static> {
     /// `Signal::create(T::default())` via
     /// `#[new(skip)]`.
     #[new(skip)]
+    #[get(type(copy))]
     pub(crate) value: Signal<T>,
     /// The internal pending/empty state. Defaults to
     /// `Signal::create(DebounceState::Idle)` via
@@ -34,3 +35,8 @@ pub struct DebouncedValue<T: Clone + PartialEq + Default + 'static> {
     /// The quiet period in milliseconds.
     pub(crate) delay_ms: u32,
 }
+
+/// `DebouncedValue<T>` is `Copy` when `T` is — every field
+/// (`Signal<T>`, `Signal<DebounceState<T>>`, `u32`) is itself
+/// `Copy`, so the blanket impl is sound.
+impl<T> Copy for DebouncedValue<T> where T: Clone + PartialEq + Default + 'static {}

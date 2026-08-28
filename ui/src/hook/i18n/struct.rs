@@ -18,6 +18,11 @@ use super::*;
 /// &[(k, v), ...])` build the inner map by direct
 /// insertion without the user having to allocate one
 /// `HashMap` per locale.
+/// `I18n` is `Copy` because every field is a `Signal`, which is
+/// already `Copy` — the registry hands out cheap `usize`
+/// addresses for any `T: Clone + PartialEq + 'static`.
+impl Copy for I18n {}
+
 #[derive(Clone, Data, New)]
 pub struct I18n {
     /// The currently-active locale tag. Setting this

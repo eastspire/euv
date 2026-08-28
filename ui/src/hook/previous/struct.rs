@@ -32,3 +32,8 @@ pub struct Previous<T: Clone + PartialEq + 'static> {
     /// `record` call.
     pub(crate) previous: Signal<Option<T>>,
 }
+
+/// `Previous<T>` is `Copy` when `T` is — `Signal<Option<T>>` is
+/// already `Copy` (the signal registry hands out cheap `usize`
+/// addresses), so this blanket impl is sound.
+impl<T> Copy for Previous<T> where T: Clone + PartialEq + 'static {}
