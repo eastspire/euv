@@ -6,6 +6,10 @@ use super::*;
 pub(crate) fn page_hooks_i18n(node: VirtualNode<PageHooksI18nProps>) -> VirtualNode {
     let PageHooksI18nProps: PageHooksI18nProps = node.try_get_props().unwrap_or_default();
     let i18n: I18n = use_i18n(HOOKS_I18N_DEFAULT_LOCALE);
+    // Subscribe to the locale signal so the active-state highlight
+    // and the translation readout both re-render when the user
+    // switches locales. `Signal<String>` is `Copy`, so we can copy
+    // it directly from `get_locale()` without deref.
     let locale: Signal<String> = *i18n.get_locale();
     let locale_clone: String = String::from(HOOKS_I18N_DEFAULT_LOCALE);
     let en_entries_static: [(&'static str, &'static str); 2] = HOOKS_I18N_EN_MESSAGES;
@@ -30,12 +34,20 @@ pub(crate) fn page_hooks_i18n(node: VirtualNode<PageHooksI18nProps>) -> VirtualN
                 div {
                     class: c_button_controls()
                     euv_button {
-                        variant: EuvButtonVariant::Primary
+                        variant: if { locale.get() == HOOKS_I18N_DEFAULT_LOCALE } {
+                            EuvButtonVariant::Primary
+                        } else {
+                            EuvButtonVariant::Outline
+                        }
                         label: en_label
                         onclick: hooks_i18n_switch(i18n, en_target.clone())
                     }
                     euv_button {
-                        variant: EuvButtonVariant::Outline
+                        variant: if { locale.get() == HOOKS_I18N_OTHER_LOCALE } {
+                            EuvButtonVariant::Primary
+                        } else {
+                            EuvButtonVariant::Outline
+                        }
                         label: other_label
                         onclick: hooks_i18n_switch(i18n, other_target.clone())
                     }
