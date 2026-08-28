@@ -1,5 +1,6 @@
 use super::*;
 
+/// Inherent implementation of [`SuspenseHandle`].
 impl<T: Clone + PartialEq + 'static> SuspenseHandle<T> {
     /// Creates a new `SuspenseHandle` in the `Pending`
     /// phase.
@@ -37,6 +38,7 @@ impl<T: Clone + PartialEq + 'static> SuspenseHandle<T> {
     }
 }
 
+/// Default-construction for [`SuspenseHandle`].
 impl<T: Clone + PartialEq + 'static> Default for SuspenseHandle<T> {
     /// Constructs a default [`SuspenseHandle`] value.
     fn default() -> Self {
@@ -44,6 +46,7 @@ impl<T: Clone + PartialEq + 'static> Default for SuspenseHandle<T> {
     }
 }
 
+/// Debug formatting for [`SuspenseHandle`].
 impl<T: Clone + PartialEq + Debug + 'static> Display for SuspenseHandle<T> {
     /// Formats the [`SuspenseHandle`] via the supplied formatter.
     ///
@@ -59,6 +62,7 @@ impl<T: Clone + PartialEq + Debug + 'static> Display for SuspenseHandle<T> {
     }
 }
 
+/// Equality for [`SuspensePhase`].
 impl<T: PartialEq> PartialEq for SuspensePhase<T> {
     /// Returns `true` when `self` and `other` are equivalent by the [`PartialEq`] contract.
     ///

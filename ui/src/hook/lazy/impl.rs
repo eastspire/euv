@@ -1,5 +1,6 @@
 use super::*;
 
+/// Equality for [`LoadState`].
 impl<T: PartialEq> PartialEq for LoadState<T> {
     /// Returns `true` when `self` and `other` are equivalent by the [`PartialEq`] contract.
     ///
@@ -21,6 +22,7 @@ impl<T: PartialEq> PartialEq for LoadState<T> {
     }
 }
 
+/// Inherent implementation of [`LazyComponent`].
 impl<T: Clone + PartialEq + 'static> LazyComponent<T> {
     /// Creates a new lazy component with the given
     /// factory. The factory is NOT called yet.
@@ -140,6 +142,7 @@ impl<T: Clone + PartialEq + 'static> LazyComponent<T> {
     }
 }
 
+/// Debug formatting for [`LazyComponent`].
 impl<T: Clone + PartialEq + Debug + 'static> Debug for LazyComponent<T> {
     /// Formats the [`LazyComponent`] via the supplied formatter.
     ///
