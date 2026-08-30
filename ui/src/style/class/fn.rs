@@ -733,9 +733,10 @@ class! {
     }
 
     pub c_euv_tag_solid_black {
-        display: "inline-flex";
-        align-items: "center";
-        justify-content: "center";
+        display: "inline-block";
+        vertical-align: "middle";
+        text-align: "center";
+        line-height: "1";
         color: var!(text-on-accent);
         padding: format!("{} {}", var!(space-xs), var!(space-md));
         font-size: var!(font-sm);
@@ -743,18 +744,21 @@ class! {
         cursor: "pointer";
         background: var!(accent);
         border: format!("1px solid {}", var!(accent));
+        box-sizing: "border-box";
     }
 
     pub c_euv_tag_solid_white {
-        display: "inline-flex";
-        align-items: "center";
-        justify-content: "center";
+        display: "inline-block";
+        vertical-align: "middle";
+        text-align: "center";
+        line-height: "1";
         color: var!(foreground);
         padding: format!("{} {}", var!(space-2xs), var!(space-sm));
         font-size: var!(font-xs);
         font-weight: "600";
         cursor: "pointer";
         border: format!("1.5px solid {}", var!(accent));
+        box-sizing: "border-box";
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -762,27 +766,31 @@ class! {
     // ═══════════════════════════════════════════════════════════════════════════
 
     pub c_euv_tag_outline_black {
-        display: "inline-flex";
-        justify-content: "center";
-        align-items: "center";
+        display: "inline-block";
+        vertical-align: "middle";
+        text-align: "center";
+        line-height: "1";
         color: var!(accent);
         padding: format!("{} {}", var!(space-2xs), var!(space-sm));
         font-size: var!(font-xs);
         font-weight: "600";
         cursor: "pointer";
         border: format!("1.5px solid {}", var!(accent));
+        box-sizing: "border-box";
     }
 
     pub c_euv_tag_outline_white {
-        display: "inline-flex";
-        justify-content: "center";
-        align-items: "center";
+        display: "inline-block";
+        vertical-align: "middle";
+        text-align: "center";
+        line-height: "1";
         color: var!(foreground);
         padding: format!("{} {}", var!(space-xs), var!(space-md));
         font-size: var!(font-sm);
         font-weight: "600";
         cursor: "pointer";
         border: format!("1.5px solid {}", var!(border));
+        box-sizing: "border-box";
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
