@@ -207,9 +207,15 @@ pub const EUV_MD_CSS: &str = r#"
    its longest word plus padding, leaving a tall narrow box with large
    blank gaps on every other line. Promote it to `display: block` so
    the box fills the cell and the text wraps naturally, while still
-   preserving the per-fragment border from the rule above. */
-.md-body td > code,
-.md-body th > code {
+   preserving the per-fragment border from the rule above.
+
+   We do NOT use `td > code` here. euv-docs / VuePress insert
+   `display: contents` <div> / <slot> wrappers between the cell and
+   the <code> element at runtime, so the direct-child selector
+   never matches in the deployed build. Using `td code` instead
+   reaches the same <code> regardless of those transparent wrappers. */
+.md-body td code,
+.md-body th code {
     display: block;
 }
 .md-body pre {
