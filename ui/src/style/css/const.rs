@@ -159,8 +159,17 @@ pub const EUV_MD_CSS: &str = r#"
     -webkit-box-decoration-break: clone;
     box-decoration-break: clone;
     display: inline-block;
-    vertical-align: text-top;
-    line-height: 1.4;
+    /* `vertical-align: baseline` plus `line-height: 1` keeps the
+       <code> box visually on the same baseline as the surrounding
+       text. Earlier revisions used `vertical-align: text-top` with
+       `line-height: 1.4`, which pushed the box downward and made the
+       framed text look like it was sitting on a lower line than the
+       surrounding body text — a small offset, but very noticeable in
+       tight running prose like list items and paragraphs. With
+       `line-height: 1` the inline-block has no extra leading so its
+       baseline aligns with the baseline of the parent line. */
+    vertical-align: baseline;
+    line-height: 1;
 }
 .md-body pre {
     padding: 1em 1.2em;
