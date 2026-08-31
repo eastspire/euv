@@ -213,7 +213,11 @@ pub const EUV_MD_CSS: &str = r#"
    `display: contents` <div> / <slot> wrappers between the cell and
    the <code> element at runtime, so the direct-child selector
    never matches in the deployed build. Using `td code` instead
-   reaches the same <code> regardless of those transparent wrappers. */
+   reaches the same <code> regardless of those transparent wrappers.
+
+   Specificity check: `.md-body td code` is (0,1,2) and the base
+   `.md-body code` rule is (0,1,1), so this rule wins without
+   needing `!important` or repeated `.md-body` classes. */
 .md-body td code,
 .md-body th code {
     display: block;
