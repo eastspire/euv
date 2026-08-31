@@ -101,9 +101,20 @@ pub const EUV_MD_CSS: &str = r#"
     border: 1px solid var(--border);
     /* Inline <code> that wraps to multiple lines must keep its border
        on every fragment, otherwise the first line loses its right border
-       and subsequent lines lose their left border. */
+       and subsequent lines lose their left border.
+
+       box-decoration-break: clone alone is not enough in practice: the
+       per-fragment borders stack against the next fragment's background
+       and the visual gap between fragments collapses, making the right
+       border of one line look like the left border of the next (and
+       neither looks fully closed). Making the element inline-block
+       guarantees each fragment draws its own box with its own four
+       borders, exactly the same trick used by euv_tag. */
     -webkit-box-decoration-break: clone;
     box-decoration-break: clone;
+    display: inline-block;
+    vertical-align: text-top;
+    line-height: 1.4;
 }
 .md-body pre {
     padding: 1em 1.2em;
