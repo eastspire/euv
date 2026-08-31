@@ -50,6 +50,22 @@ pub const EUV_MD_CSS: &str = r#"
 .md-body h6:hover .header-anchor {
     opacity: 1;
 }
+/* On narrow viewports the negative `margin-left: -0.9em` pushes the `#`
+   sign past the left edge of the viewport (anchor x ≈ -11px on a 380px
+   viewport), so hover-revealed anchors get clipped. On mobile we drop
+   the float + negative margin and make the anchor a small inline
+   prefix instead, with a regular left margin so it stays inside the
+   content box. */
+@media (max-width: 767px) {
+    .md-body .header-anchor {
+        float: none;
+        margin-left: 0;
+        margin-right: 0.3em;
+        padding-right: 0;
+        padding-left: 0;
+        display: inline-block;
+    }
+}
 .md-body p, .md-body ul, .md-body ol, .md-body blockquote, .md-body pre, .md-body table {
     margin: 1em 0;
 }
