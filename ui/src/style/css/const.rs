@@ -41,6 +41,11 @@ pub const EUV_MD_CSS: &str = r#"
     font-weight: 400;
     transition: opacity 0.15s ease-out;
     user-select: none;
+    /* The `.md-body a` rule below applies `text-decoration: underline
+       dashed` to every anchor. The header-anchor is a typographic
+       icon, not a navigable link in the visual sense, so drop the
+       underline. */
+    text-decoration: none;
 }
 .md-body h1:hover .header-anchor,
 .md-body h2:hover .header-anchor,
