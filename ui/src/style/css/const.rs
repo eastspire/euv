@@ -203,6 +203,15 @@ pub const EUV_MD_CSS: &str = r#"
     vertical-align: baseline;
     line-height: 1;
 }
+/* In a table cell an inline-block <code> collapses to the width of
+   its longest word plus padding, leaving a tall narrow box with large
+   blank gaps on every other line. Promote it to `display: block` so
+   the box fills the cell and the text wraps naturally, while still
+   preserving the per-fragment border from the rule above. */
+.md-body td > code,
+.md-body th > code {
+    display: block;
+}
 .md-body pre {
     padding: 1em 1.2em;
     overflow-x: auto;
