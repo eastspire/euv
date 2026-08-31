@@ -53,17 +53,42 @@ pub const EUV_MD_CSS: &str = r#"
 /* On narrow viewports the negative `margin-left: -0.9em` pushes the `#`
    sign past the left edge of the viewport (anchor x ≈ -11px on a 380px
    viewport), so hover-revealed anchors get clipped. On mobile we drop
-   the float + negative margin and make the anchor a small inline
-   prefix instead, with a regular left margin so it stays inside the
-   content box. */
+   the float + negative margin and absolutely position the anchor at
+   the heading's left edge instead, with the heading content shifted
+   right via `padding-left`. This way:
+
+   * The `#` stays inside the viewport at all times.
+   * The `#` is vertically centered against the first line of the
+     heading (`align-items: center`), so the two sit on the same
+     optical line instead of the `#` floating above the heading text.
+   * The heading text gets the full content width (minus the small
+     reserved gutter), so a long heading like "Markdown Features" no
+     longer wraps with one orphan word on its own line leaving a big
+     empty space at the end of the first line. */
 @media (max-width: 767px) {
+    .md-body h1,
+    .md-body h2,
+    .md-body h3,
+    .md-body h4,
+    .md-body h5,
+    .md-body h6 {
+        position: relative;
+        padding-left: 1.6em;
+    }
     .md-body .header-anchor {
+        position: absolute;
+        left: 0;
+        top: 0;
+        height: 100%;
+        width: 1em;
+        margin: 0;
+        padding: 0;
         float: none;
-        margin-left: 0;
-        margin-right: 0.3em;
-        padding-right: 0;
-        padding-left: 0;
-        display: inline-block;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.85em;
+        line-height: 1;
     }
 }
 .md-body p, .md-body ul, .md-body ol, .md-body blockquote, .md-body pre, .md-body table {
