@@ -63,37 +63,69 @@ pub const EUV_MD_CSS: &str = r#"
    right via `padding-left`. This way:
 
    * The `#` stays inside the viewport at all times.
-   * The `#` is vertically centered against the first line of the
-     heading (`align-items: center`), so the two sit on the same
-     optical line instead of the `#` floating above the heading text.
+   * The `#` baseline aligns with the heading's first line baseline
+     (`vertical-align: middle` on a single-line-height inline-flex
+     box puts the `#` on the same horizontal line as the heading
+     text, not against the heading's overall vertical centre).
    * The heading text gets the full content width (minus the small
      reserved gutter), so a long heading like "Markdown Features" no
      longer wraps with one orphan word on its own line leaving a big
-     empty space at the end of the first line. */
+     empty space at the end of the first line.
+
+   Earlier revisions used `height: 100%; align-items: center`, which
+   stretched the anchor box to the full heading height and put the
+   `#` on the heading's geometric centre. For a wrapped h1 like
+   "Markdown Features" that ended up aligned with the second line,
+   not the first — visually it looked like the `#` belonged to
+   "Features" rather than "Markdown". */
 @media (max-width: 767px) {
+    /* On narrow viewports the negative `margin-left: -0.9em` on the
+       anchor pushes the `#` sign past the left edge of the viewport
+       (anchor x ≈ -11px on a 380px viewport), so hover-revealed
+       anchors get clipped. We rework the mobile anchor to live
+       inside the heading's inline flow instead of floating to the
+       left:
+
+       * The heading itself gets a `padding-left` so its inline
+         content (the actual heading text) still starts at the same
+         visual x as before.
+       * The anchor is the FIRST inline child of the heading, with
+         a `margin-left: -1.6em` so it pulls itself into the gutter
+         reserved by that padding.
+       * With `vertical-align: baseline` and a single-line-height
+         box (`line-height: 1`), the `#` glyph baseline lines up
+         with the heading text baseline on the FIRST line — so the
+         `#` and "Markdown" share the same horizontal line, instead
+         of the `#` being vertically centred against the whole
+         heading box (which, for wrapped headings like "Markdown
+         Features", used to put `#` on the line between the two
+         words).
+       * The heading text gets the full content width (minus the
+         gutter), so a long heading like "Markdown Features" no
+         longer wraps with one orphan word on its own line leaving
+         a big empty space at the end of the first line — because
+         the anchor no longer occupies any inline space on the
+         first line. */
     .md-body h1,
     .md-body h2,
     .md-body h3,
     .md-body h4,
     .md-body h5,
     .md-body h6 {
-        position: relative;
         padding-left: 1.6em;
     }
     .md-body .header-anchor {
-        position: absolute;
-        left: 0;
-        top: 0;
-        height: 100%;
-        width: 1em;
-        margin: 0;
-        padding: 0;
         float: none;
+        margin-left: -1.6em;
+        margin-right: 0;
+        padding: 0;
+        width: 1.6em;
         display: inline-flex;
-        align-items: center;
-        justify-content: center;
+        align-items: flex-end;
+        justify-content: flex-start;
         font-size: 0.85em;
         line-height: 1;
+        vertical-align: baseline;
     }
 }
 .md-body p, .md-body ul, .md-body ol, .md-body blockquote, .md-body pre, .md-body table {
