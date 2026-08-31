@@ -99,6 +99,11 @@ pub const EUV_MD_CSS: &str = r#"
     padding: 0.15em 0.4em;
     background: var(--accent-muted);
     border: 1px solid var(--border);
+    /* Inline <code> that wraps to multiple lines must keep its border
+       on every fragment, otherwise the first line loses its right border
+       and subsequent lines lose their left border. */
+    -webkit-box-decoration-break: clone;
+    box-decoration-break: clone;
 }
 .md-body pre {
     padding: 1em 1.2em;
