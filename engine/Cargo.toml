@@ -1,6 +1,6 @@
 [package]
 name = "euv-engine"
-version = "0.18.35"
+version = "0.18.36"
 readme = "README.md"
 edition = "2024"
 authors = ["root@ltpp.vip"]
