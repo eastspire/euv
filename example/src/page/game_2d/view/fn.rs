@@ -190,22 +190,16 @@ fn game_2d_canvas_tab(fullscreen: UseGame2DFullscreen) -> VirtualNode {
                 } else {
                     c_game_canvas_wrapper(&format!("{GAME_2D_CANVAS_WIDTH} / {GAME_2D_CANVAS_HEIGHT}"))
                 }
-                if { canvas_2d_fullscreen.get() } {
+                div {
+                    class: c_game_fullscreen_canvas_wrapper()
                     div {
-                        class: c_game_fullscreen_canvas_wrapper()
+                        class: c_game_fullscreen_canvas_letterbox()
                         canvas {
                             id: GAME_2D_CANVAS_ID
                             class: c_game_2d_canvas()
-                            onclick: on_canvas_click.clone()
-                            ontouchstart: on_canvas_touch.clone()
+                            onclick: on_canvas_click
+                            ontouchstart: on_canvas_touch
                         }
-                    }
-                } else {
-                    canvas {
-                        id: GAME_2D_CANVAS_ID
-                        class: c_game_2d_canvas()
-                        onclick: on_canvas_click.clone()
-                        ontouchstart: on_canvas_touch.clone()
                     }
                 }
                 if { canvas_2d_fullscreen.get() } {
@@ -345,33 +339,21 @@ fn game_2d_webgpu_tab(state: UseGame2DWebGpu, fullscreen: UseGame2DFullscreen) -
                 } else {
                     c_game_canvas_wrapper(&format!("{GAME_2D_CANVAS_WIDTH} / {GAME_2D_CANVAS_HEIGHT}"))
                 }
-                if { web_gpu_fullscreen.get() } {
+                div {
+                    class: c_game_fullscreen_canvas_wrapper()
                     div {
-                        class: c_game_fullscreen_canvas_wrapper()
+                        class: c_game_fullscreen_canvas_letterbox()
                         canvas {
                             id: GAME_2D_WEBGPU_CANVAS_ID
                             class: c_game_2d_canvas()
-                            onclick: on_canvas_click.clone()
-                            ontouchstart: on_canvas_touch.clone()
+                            onclick: on_canvas_click
+                            ontouchstart: on_canvas_touch
                         }
                         if { !state.get_loaded().get() } {
                             canvas {
                                 id: GAME_2D_WEBGPU_LOADING_CANVAS_ID
                                 class: c_game_loading_overlay()
                             }
-                        }
-                    }
-                } else {
-                    canvas {
-                        id: GAME_2D_WEBGPU_CANVAS_ID
-                        class: c_game_2d_canvas()
-                        onclick: on_canvas_click.clone()
-                        ontouchstart: on_canvas_touch.clone()
-                    }
-                    if { !state.get_loaded().get() } {
-                        canvas {
-                            id: GAME_2D_WEBGPU_LOADING_CANVAS_ID
-                            class: c_game_loading_overlay()
                         }
                     }
                 }
@@ -542,33 +524,21 @@ fn game_2d_webgl_tab(state: UseGame2DWebGl, fullscreen: UseGame2DFullscreen) -> 
                 } else {
                     c_game_canvas_wrapper(&format!("{GAME_2D_CANVAS_WIDTH} / {GAME_2D_CANVAS_HEIGHT}"))
                 }
-                if { web_gl_fullscreen.get() } {
+                div {
+                    class: c_game_fullscreen_canvas_wrapper()
                     div {
-                        class: c_game_fullscreen_canvas_wrapper()
+                        class: c_game_fullscreen_canvas_letterbox()
                         canvas {
                             id: GAME_2D_WEBGL_CANVAS_ID
                             class: c_game_2d_canvas()
-                            onclick: on_canvas_click.clone()
-                            ontouchstart: on_canvas_touch.clone()
+                            onclick: on_canvas_click
+                            ontouchstart: on_canvas_touch
                         }
                         if { !state.get_loaded().get() } {
                             canvas {
                                 id: GAME_2D_WEBGL_LOADING_CANVAS_ID
                                 class: c_game_loading_overlay()
                             }
-                        }
-                    }
-                } else {
-                    canvas {
-                        id: GAME_2D_WEBGL_CANVAS_ID
-                        class: c_game_2d_canvas()
-                        onclick: on_canvas_click.clone()
-                        ontouchstart: on_canvas_touch.clone()
-                    }
-                    if { !state.get_loaded().get() } {
-                        canvas {
-                            id: GAME_2D_WEBGL_LOADING_CANVAS_ID
-                            class: c_game_loading_overlay()
                         }
                     }
                 }
