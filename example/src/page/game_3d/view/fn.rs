@@ -180,10 +180,9 @@ fn game_3d_canvas_tab(fullscreen: UseGame3DFullscreen) -> VirtualNode {
                 } else {
                     c_game_canvas_wrapper(&format!("{GAME_3D_CANVAS_WIDTH} / {GAME_3D_CANVAS_HEIGHT}"))
                 }
-                div {
-                    class: c_game_fullscreen_canvas_wrapper()
+                if { canvas_2d_fullscreen.get() } {
                     div {
-                        class: c_game_fullscreen_canvas_letterbox()
+                        class: c_game_fullscreen_canvas_wrapper()
                         canvas {
                             id: GAME_3D_CANVAS_ID
                             class: c_game_3d_canvas()
@@ -196,6 +195,19 @@ fn game_3d_canvas_tab(fullscreen: UseGame3DFullscreen) -> VirtualNode {
                             ontouchend: on_touch_end.clone()
                             ontouchcancel: on_touch_end.clone()
                         }
+                    }
+                } else {
+                    canvas {
+                        id: GAME_3D_CANVAS_ID
+                        class: c_game_3d_canvas()
+                        onmousedown: on_pointer_down.clone()
+                        onmousemove: on_pointer_move.clone()
+                        onmouseup: on_pointer_up.clone()
+                        onmouseleave: on_pointer_up.clone()
+                        ontouchstart: on_touch_start.clone()
+                        ontouchmove: on_touch_move.clone()
+                        ontouchend: on_touch_end.clone()
+                        ontouchcancel: on_touch_end.clone()
                     }
                 }
                 if { canvas_2d_fullscreen.get() } {
@@ -330,10 +342,9 @@ fn game_3d_webgpu_tab(state: UseGame3DWebGpu, fullscreen: UseGame3DFullscreen) -
                 } else {
                     c_game_canvas_wrapper(&format!("{GAME_3D_CANVAS_WIDTH} / {GAME_3D_CANVAS_HEIGHT}"))
                 }
-                div {
-                    class: c_game_fullscreen_canvas_wrapper()
+                if { web_gpu_fullscreen.get() } {
                     div {
-                        class: c_game_fullscreen_canvas_letterbox()
+                        class: c_game_fullscreen_canvas_wrapper()
                         canvas {
                             id: GAME_3D_WEBGPU_CANVAS_ID
                             class: c_game_3d_canvas()
@@ -351,6 +362,25 @@ fn game_3d_webgpu_tab(state: UseGame3DWebGpu, fullscreen: UseGame3DFullscreen) -
                                 id: GAME_3D_WEBGPU_LOADING_CANVAS_ID
                                 class: c_game_loading_overlay()
                             }
+                        }
+                    }
+                } else {
+                    canvas {
+                        id: GAME_3D_WEBGPU_CANVAS_ID
+                        class: c_game_3d_canvas()
+                        onmousedown: on_pointer_down.clone()
+                        onmousemove: on_pointer_move.clone()
+                        onmouseup: on_pointer_up.clone()
+                        onmouseleave: on_pointer_up.clone()
+                        ontouchstart: on_touch_start.clone()
+                        ontouchmove: on_touch_move.clone()
+                        ontouchend: on_touch_end.clone()
+                        ontouchcancel: on_touch_end.clone()
+                    }
+                    if { !state.get_loaded().get() } {
+                        canvas {
+                            id: GAME_3D_WEBGPU_LOADING_CANVAS_ID
+                            class: c_game_loading_overlay()
                         }
                     }
                 }
@@ -516,10 +546,9 @@ fn game_3d_webgl_tab(state: UseGame3DWebGl, fullscreen: UseGame3DFullscreen) -> 
                 } else {
                     c_game_canvas_wrapper(&format!("{GAME_3D_CANVAS_WIDTH} / {GAME_3D_CANVAS_HEIGHT}"))
                 }
-                div {
-                    class: c_game_fullscreen_canvas_wrapper()
+                if { web_gl_fullscreen.get() } {
                     div {
-                        class: c_game_fullscreen_canvas_letterbox()
+                        class: c_game_fullscreen_canvas_wrapper()
                         canvas {
                             id: GAME_3D_WEBGL_CANVAS_ID
                             class: c_game_3d_canvas()
@@ -537,6 +566,25 @@ fn game_3d_webgl_tab(state: UseGame3DWebGl, fullscreen: UseGame3DFullscreen) -> 
                                 id: GAME_3D_WEBGL_LOADING_CANVAS_ID
                                 class: c_game_loading_overlay()
                             }
+                        }
+                    }
+                } else {
+                    canvas {
+                        id: GAME_3D_WEBGL_CANVAS_ID
+                        class: c_game_3d_canvas()
+                        onmousedown: on_pointer_down.clone()
+                        onmousemove: on_pointer_move.clone()
+                        onmouseup: on_pointer_up.clone()
+                        onmouseleave: on_pointer_up.clone()
+                        ontouchstart: on_touch_start.clone()
+                        ontouchmove: on_touch_move.clone()
+                        ontouchend: on_touch_end.clone()
+                        ontouchcancel: on_touch_end.clone()
+                    }
+                    if { !state.get_loaded().get() } {
+                        canvas {
+                            id: GAME_3D_WEBGL_LOADING_CANVAS_ID
+                            class: c_game_loading_overlay()
                         }
                     }
                 }
