@@ -37,7 +37,7 @@ pub(crate) fn page_game_2d(node: VirtualNode<PageGame2DProps>) -> VirtualNode {
                         } else {
                             c_tab_item_inactive()
                         }
-                        onclick: game_2d_on_tab_select(tab, Game2DTab::Canvas2D)
+                        onclick: game_2d_on_tab_select(tab, Game2DTab::Canvas2D, fullscreen)
                         "2D"
                     }
                     div {
@@ -46,7 +46,7 @@ pub(crate) fn page_game_2d(node: VirtualNode<PageGame2DProps>) -> VirtualNode {
                         } else {
                             c_tab_item_inactive()
                         }
-                        onclick: game_2d_on_tab_select(tab, Game2DTab::WebGl)
+                        onclick: game_2d_on_tab_select(tab, Game2DTab::WebGl, fullscreen)
                         "GL"
                     }
                     div {
@@ -55,7 +55,7 @@ pub(crate) fn page_game_2d(node: VirtualNode<PageGame2DProps>) -> VirtualNode {
                         } else {
                             c_tab_item_inactive()
                         }
-                        onclick: game_2d_on_tab_select(tab, Game2DTab::WebGpu)
+                        onclick: game_2d_on_tab_select(tab, Game2DTab::WebGpu, fullscreen)
                         "GPU"
                     }
                 }
@@ -192,11 +192,14 @@ fn game_2d_canvas_tab(fullscreen: UseGame2DFullscreen) -> VirtualNode {
                 }
                 div {
                     class: c_game_fullscreen_canvas_wrapper()
-                    canvas {
-                        id: GAME_2D_CANVAS_ID
-                        class: c_game_2d_canvas()
-                        onclick: on_canvas_click
-                        ontouchstart: on_canvas_touch
+                    div {
+                        class: c_game_fullscreen_canvas_letterbox()
+                        canvas {
+                            id: GAME_2D_CANVAS_ID
+                            class: c_game_2d_canvas()
+                            onclick: on_canvas_click
+                            ontouchstart: on_canvas_touch
+                        }
                     }
                 }
                 if { canvas_2d_fullscreen.get() } {
@@ -338,16 +341,19 @@ fn game_2d_webgpu_tab(state: UseGame2DWebGpu, fullscreen: UseGame2DFullscreen) -
                 }
                 div {
                     class: c_game_fullscreen_canvas_wrapper()
-                    canvas {
-                        id: GAME_2D_WEBGPU_CANVAS_ID
-                        class: c_game_2d_canvas()
-                        onclick: on_canvas_click
-                        ontouchstart: on_canvas_touch
-                    }
-                    if { !state.get_loaded().get() } {
+                    div {
+                        class: c_game_fullscreen_canvas_letterbox()
                         canvas {
-                            id: GAME_2D_WEBGPU_LOADING_CANVAS_ID
-                            class: c_game_loading_overlay()
+                            id: GAME_2D_WEBGPU_CANVAS_ID
+                            class: c_game_2d_canvas()
+                            onclick: on_canvas_click
+                            ontouchstart: on_canvas_touch
+                        }
+                        if { !state.get_loaded().get() } {
+                            canvas {
+                                id: GAME_2D_WEBGPU_LOADING_CANVAS_ID
+                                class: c_game_loading_overlay()
+                            }
                         }
                     }
                 }
@@ -520,16 +526,19 @@ fn game_2d_webgl_tab(state: UseGame2DWebGl, fullscreen: UseGame2DFullscreen) -> 
                 }
                 div {
                     class: c_game_fullscreen_canvas_wrapper()
-                    canvas {
-                        id: GAME_2D_WEBGL_CANVAS_ID
-                        class: c_game_2d_canvas()
-                        onclick: on_canvas_click
-                        ontouchstart: on_canvas_touch
-                    }
-                    if { !state.get_loaded().get() } {
+                    div {
+                        class: c_game_fullscreen_canvas_letterbox()
                         canvas {
-                            id: GAME_2D_WEBGL_LOADING_CANVAS_ID
-                            class: c_game_loading_overlay()
+                            id: GAME_2D_WEBGL_CANVAS_ID
+                            class: c_game_2d_canvas()
+                            onclick: on_canvas_click
+                            ontouchstart: on_canvas_touch
+                        }
+                        if { !state.get_loaded().get() } {
+                            canvas {
+                                id: GAME_2D_WEBGL_LOADING_CANVAS_ID
+                                class: c_game_loading_overlay()
+                            }
                         }
                     }
                 }
