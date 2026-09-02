@@ -17,6 +17,8 @@ use super::*;
 pub(crate) fn page_game_2d(node: VirtualNode<PageGame2DProps>) -> VirtualNode {
     let PageGame2DProps: PageGame2DProps = node.try_get_props().unwrap_or_default();
     let tab: Signal<Game2DTab> = App::use_signal(Game2DTab::default);
+    let fullscreen: UseGame2DFullscreen = use_game_2d_fullscreen_state();
+    use_game_2d_fullscreen_popstate(fullscreen);
     html! {
         div {
             class: c_page_container()
@@ -60,17 +62,17 @@ pub(crate) fn page_game_2d(node: VirtualNode<PageGame2DProps>) -> VirtualNode {
                 match { tab } {
                     Game2DTab::Canvas2D => {
                         div {
-                            game_2d_canvas_tab()
+                            game_2d_canvas_tab(fullscreen)
                         }
                     }
                     Game2DTab::WebGl => {
                         div {
-                            game_2d_webgl_tab(use_game_2d_webgl_state())
+                            game_2d_webgl_tab(use_game_2d_webgl_state(), fullscreen)
                         }
                     }
                     Game2DTab::WebGpu => {
                         div {
-                            game_2d_webgpu_tab(use_game_2d_webgpu_state())
+                            game_2d_webgpu_tab(use_game_2d_webgpu_state(), fullscreen)
                         }
                     }
                 }
@@ -109,8 +111,9 @@ pub(crate) fn page_game_2d(node: VirtualNode<PageGame2DProps>) -> VirtualNode {
 /// # Returns
 ///
 /// - `VirtualNode` - The Canvas 2D tab virtual DOM tree.
-fn game_2d_canvas_tab() -> VirtualNode {
+fn game_2d_canvas_tab(fullscreen: UseGame2DFullscreen) -> VirtualNode {
     let state: UseGame2D = use_game_2d_state();
+    let canvas_2d_fullscreen: Signal<bool> = fullscreen.get_canvas_2d();
     let balls_store: Signal<BallStore> = App::use_signal(|| {
         let balls: Rc<RefCell<Vec<Ball>>> = Rc::new(RefCell::new(Vec::new()));
         balls
@@ -182,12 +185,29 @@ fn game_2d_canvas_tab() -> VirtualNode {
                 }
             }
             div {
-                class: c_game_canvas_wrapper(&format!("{GAME_2D_CANVAS_WIDTH} / {GAME_2D_CANVAS_HEIGHT}"))
-                canvas {
-                    id: GAME_2D_CANVAS_ID
-                    class: c_game_2d_canvas()
-                    onclick: on_canvas_click
-                    ontouchstart: on_canvas_touch
+                class: if { canvas_2d_fullscreen.get() } {
+                    c_game_container_fullscreen()
+                } else {
+                    c_game_canvas_wrapper(&format!("{GAME_2D_CANVAS_WIDTH} / {GAME_2D_CANVAS_HEIGHT}"))
+                }
+                div {
+                    class: c_game_fullscreen_canvas_wrapper()
+                    canvas {
+                        id: GAME_2D_CANVAS_ID
+                        class: c_game_2d_canvas()
+                        onclick: on_canvas_click
+                        ontouchstart: on_canvas_touch
+                    }
+                }
+                if { canvas_2d_fullscreen.get() } {
+                    div {
+                        class: c_game_fullscreen_toolbar()
+                        euv_button {
+                            variant: EuvButtonVariant::Primary
+                            label: "Exit"
+                            onclick: game_2d_on_exit_fullscreen(canvas_2d_fullscreen)
+                        }
+                    }
                 }
             }
             div {
@@ -201,6 +221,11 @@ fn game_2d_canvas_tab() -> VirtualNode {
                     variant: EuvButtonVariant::Primary
                     label: "Clear"
                     onclick: on_clear
+                }
+                euv_button {
+                    variant: EuvButtonVariant::Primary
+                    label: "Enter Fullscreen"
+                    onclick: game_2d_on_enter_fullscreen(fullscreen, canvas_2d_fullscreen)
                 }
             }
         }
@@ -220,8 +245,9 @@ fn game_2d_canvas_tab() -> VirtualNode {
 /// # Arguments
 ///
 /// - `UseGame2DWebGpu` - A `UseGame2DWebGpu` parameter.
-fn game_2d_webgpu_tab(state: UseGame2DWebGpu) -> VirtualNode {
+fn game_2d_webgpu_tab(state: UseGame2DWebGpu, fullscreen: UseGame2DFullscreen) -> VirtualNode {
     let game: UseGame2D = use_game_2d_state();
+    let web_gpu_fullscreen: Signal<bool> = fullscreen.get_web_gpu();
     let balls_store: Signal<BallStore> = App::use_signal(|| {
         let balls: Rc<RefCell<Vec<Ball>>> = Rc::new(RefCell::new(Vec::new()));
         balls
@@ -305,17 +331,34 @@ fn game_2d_webgpu_tab(state: UseGame2DWebGpu) -> VirtualNode {
                 }
             }
             div {
-                class: c_game_canvas_wrapper(&format!("{GAME_2D_CANVAS_WIDTH} / {GAME_2D_CANVAS_HEIGHT}"))
-                canvas {
-                    id: GAME_2D_WEBGPU_CANVAS_ID
-                    class: c_game_2d_canvas()
-                    onclick: on_canvas_click
-                    ontouchstart: on_canvas_touch
+                class: if { web_gpu_fullscreen.get() } {
+                    c_game_container_fullscreen()
+                } else {
+                    c_game_canvas_wrapper(&format!("{GAME_2D_CANVAS_WIDTH} / {GAME_2D_CANVAS_HEIGHT}"))
                 }
-                if { !state.get_loaded().get() } {
+                div {
+                    class: c_game_fullscreen_canvas_wrapper()
                     canvas {
-                        id: GAME_2D_WEBGPU_LOADING_CANVAS_ID
-                        class: c_game_loading_overlay()
+                        id: GAME_2D_WEBGPU_CANVAS_ID
+                        class: c_game_2d_canvas()
+                        onclick: on_canvas_click
+                        ontouchstart: on_canvas_touch
+                    }
+                    if { !state.get_loaded().get() } {
+                        canvas {
+                            id: GAME_2D_WEBGPU_LOADING_CANVAS_ID
+                            class: c_game_loading_overlay()
+                        }
+                    }
+                }
+                if { web_gpu_fullscreen.get() } {
+                    div {
+                        class: c_game_fullscreen_toolbar()
+                        euv_button {
+                            variant: EuvButtonVariant::Primary
+                            label: "Exit"
+                            onclick: game_2d_on_exit_fullscreen(web_gpu_fullscreen)
+                        }
                     }
                 }
             }
@@ -330,6 +373,11 @@ fn game_2d_webgpu_tab(state: UseGame2DWebGpu) -> VirtualNode {
                     variant: EuvButtonVariant::Primary
                     label: "Clear"
                     onclick: on_clear
+                }
+                euv_button {
+                    variant: EuvButtonVariant::Primary
+                    label: "Enter Fullscreen"
+                    onclick: game_2d_on_enter_fullscreen(fullscreen, web_gpu_fullscreen)
                 }
             }
         }
@@ -379,8 +427,9 @@ fn webgl_status_text(loaded: bool, active: bool, init_error_code: &str) -> &'sta
 /// # Arguments
 ///
 /// - `UseGame2DWebGl` - A `UseGame2DWebGl` parameter.
-fn game_2d_webgl_tab(state: UseGame2DWebGl) -> VirtualNode {
+fn game_2d_webgl_tab(state: UseGame2DWebGl, fullscreen: UseGame2DFullscreen) -> VirtualNode {
     let game: UseGame2D = use_game_2d_state();
+    let web_gl_fullscreen: Signal<bool> = fullscreen.get_web_gl();
     let balls_store: Signal<BallStore> = App::use_signal(|| {
         let balls: Rc<RefCell<Vec<Ball>>> = Rc::new(RefCell::new(Vec::new()));
         balls
@@ -464,17 +513,34 @@ fn game_2d_webgl_tab(state: UseGame2DWebGl) -> VirtualNode {
                 }
             }
             div {
-                class: c_game_canvas_wrapper(&format!("{GAME_2D_CANVAS_WIDTH} / {GAME_2D_CANVAS_HEIGHT}"))
-                canvas {
-                    id: GAME_2D_WEBGL_CANVAS_ID
-                    class: c_game_2d_canvas()
-                    onclick: on_canvas_click
-                    ontouchstart: on_canvas_touch
+                class: if { web_gl_fullscreen.get() } {
+                    c_game_container_fullscreen()
+                } else {
+                    c_game_canvas_wrapper(&format!("{GAME_2D_CANVAS_WIDTH} / {GAME_2D_CANVAS_HEIGHT}"))
                 }
-                if { !state.get_loaded().get() } {
+                div {
+                    class: c_game_fullscreen_canvas_wrapper()
                     canvas {
-                        id: GAME_2D_WEBGL_LOADING_CANVAS_ID
-                        class: c_game_loading_overlay()
+                        id: GAME_2D_WEBGL_CANVAS_ID
+                        class: c_game_2d_canvas()
+                        onclick: on_canvas_click
+                        ontouchstart: on_canvas_touch
+                    }
+                    if { !state.get_loaded().get() } {
+                        canvas {
+                            id: GAME_2D_WEBGL_LOADING_CANVAS_ID
+                            class: c_game_loading_overlay()
+                        }
+                    }
+                }
+                if { web_gl_fullscreen.get() } {
+                    div {
+                        class: c_game_fullscreen_toolbar()
+                        euv_button {
+                            variant: EuvButtonVariant::Primary
+                            label: "Exit"
+                            onclick: game_2d_on_exit_fullscreen(web_gl_fullscreen)
+                        }
                     }
                 }
             }
@@ -489,6 +555,11 @@ fn game_2d_webgl_tab(state: UseGame2DWebGl) -> VirtualNode {
                     variant: EuvButtonVariant::Primary
                     label: "Clear"
                     onclick: on_clear
+                }
+                euv_button {
+                    variant: EuvButtonVariant::Primary
+                    label: "Enter Fullscreen"
+                    onclick: game_2d_on_enter_fullscreen(fullscreen, web_gl_fullscreen)
                 }
             }
         }
