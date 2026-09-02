@@ -44,6 +44,7 @@ class! {
         justify-content: "center";
         overflow: "hidden";
         min-height: "0";
+        position: "relative";
     }
 
     pub c_game_3d_canvas {
