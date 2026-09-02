@@ -296,16 +296,17 @@ impl UseEuvLayout {
     /// on the real app root element and any fullscreen overlay containers.
     ///
     /// Class rules such as `c_mobile_app_root`, `c_app_nav`, `c_app_main`,
-    /// `c_mobile_nav_drawer`, and `c_canvas_container_fullscreen` consume
-    /// `var(--safe-area-inset-top)` in their `padding` declarations. By overriding
-    /// these CSS custom properties with inline style (which has higher specificity
-    /// than the stylesheet rule from `vars!`), all `var()` references resolve to
-    /// the cached pixel values, bypassing the stale `env()` function after a
+    /// `c_mobile_nav_drawer`, `c_canvas_container_fullscreen`, and
+    /// `c_game_container_fullscreen` consume `var(--safe-area-inset-top)`
+    /// in their `padding` declarations. By overriding these CSS custom
+    /// properties with inline style (which has higher specificity than the
+    /// stylesheet rule from `vars!`), all `var()` references resolve to the
+    /// cached pixel values, bypassing the stale `env()` function after a
     /// fullscreen exit.
     ///
-    /// The canvas fullscreen container is `position: fixed` and outside the app
-    /// root subtree, so it does not inherit the inline overrides — it must be
-    /// patched separately.
+    /// The canvas and game fullscreen containers are `position: fixed`
+    /// and outside the app root subtree, so they do not inherit the inline
+    /// overrides — they must be patched separately.
     pub fn apply_cached_insets() {
         let top_value: String =
             SAFE_AREA_INSET_TOP.with(|cell: &RefCell<String>| cell.borrow().clone());
@@ -360,6 +361,14 @@ impl UseEuvLayout {
             .map(|element: Element| element.unchecked_into::<HtmlElement>())
         {
             apply_to(&canvas_fullscreen);
+        }
+        if let Some(game_fullscreen) = document_value
+            .query_selector(".c_game_container_fullscreen")
+            .ok()
+            .flatten()
+            .map(|element: Element| element.unchecked_into::<HtmlElement>())
+        {
+            apply_to(&game_fullscreen);
         }
     }
 }

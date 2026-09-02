@@ -18,6 +18,8 @@ use super::*;
 pub(crate) fn page_game_3d(node: VirtualNode<PageGame3DProps>) -> VirtualNode {
     let _page_game_3d_props: PageGame3DProps = node.try_get_props().unwrap_or_default();
     let tab: Signal<Game3DTab> = App::use_signal(Game3DTab::default);
+    let fullscreen: UseGame3DFullscreen = use_game_3d_fullscreen_state();
+    use_game_3d_fullscreen_popstate(fullscreen);
     html! {
         div {
             class: c_page_container()
@@ -61,17 +63,17 @@ pub(crate) fn page_game_3d(node: VirtualNode<PageGame3DProps>) -> VirtualNode {
                 match { tab } {
                     Game3DTab::Canvas2D => {
                         div {
-                            game_3d_canvas_tab()
+                            game_3d_canvas_tab(fullscreen)
                         }
                     }
                     Game3DTab::WebGl => {
                         div {
-                            game_3d_webgl_tab(use_game_3d_webgl_state())
+                            game_3d_webgl_tab(use_game_3d_webgl_state(), fullscreen)
                         }
                     }
                     Game3DTab::WebGpu => {
                         div {
-                            game_3d_webgpu_tab(use_game_3d_webgpu_state())
+                            game_3d_webgpu_tab(use_game_3d_webgpu_state(), fullscreen)
                         }
                     }
                 }
@@ -110,8 +112,9 @@ pub(crate) fn page_game_3d(node: VirtualNode<PageGame3DProps>) -> VirtualNode {
 /// # Returns
 ///
 /// - `VirtualNode` - The Canvas 2D tab virtual DOM tree.
-fn game_3d_canvas_tab() -> VirtualNode {
+fn game_3d_canvas_tab(fullscreen: UseGame3DFullscreen) -> VirtualNode {
     let state: UseGame3D = use_game_3d_state();
+    let canvas_2d_fullscreen: Signal<bool> = fullscreen.get_canvas_2d();
     let cubes_store: Signal<CubeStore> = App::use_signal(|| {
         let cubes: Rc<RefCell<Vec<Cube3D>>> = Rc::new(RefCell::new(create_initial_cubes()));
         CubeStore(cubes)
@@ -172,18 +175,35 @@ fn game_3d_canvas_tab() -> VirtualNode {
                 }
             }
             div {
-                class: c_game_canvas_wrapper(&format!("{GAME_3D_CANVAS_WIDTH} / {GAME_3D_CANVAS_HEIGHT}"))
-                canvas {
-                    id: GAME_3D_CANVAS_ID
-                    class: c_game_3d_canvas()
-                    onmousedown: on_pointer_down.clone()
-                    onmousemove: on_pointer_move.clone()
-                    onmouseup: on_pointer_up.clone()
-                    onmouseleave: on_pointer_up.clone()
-                    ontouchstart: on_touch_start.clone()
-                    ontouchmove: on_touch_move.clone()
-                    ontouchend: on_touch_end.clone()
-                    ontouchcancel: on_touch_end.clone()
+                class: if { canvas_2d_fullscreen.get() } {
+                    c_game_container_fullscreen()
+                } else {
+                    c_game_canvas_wrapper(&format!("{GAME_3D_CANVAS_WIDTH} / {GAME_3D_CANVAS_HEIGHT}"))
+                }
+                div {
+                    class: c_game_fullscreen_canvas_wrapper()
+                    canvas {
+                        id: GAME_3D_CANVAS_ID
+                        class: c_game_3d_canvas()
+                        onmousedown: on_pointer_down.clone()
+                        onmousemove: on_pointer_move.clone()
+                        onmouseup: on_pointer_up.clone()
+                        onmouseleave: on_pointer_up.clone()
+                        ontouchstart: on_touch_start.clone()
+                        ontouchmove: on_touch_move.clone()
+                        ontouchend: on_touch_end.clone()
+                        ontouchcancel: on_touch_end.clone()
+                    }
+                }
+                if { canvas_2d_fullscreen.get() } {
+                    div {
+                        class: c_game_fullscreen_toolbar()
+                        euv_button {
+                            variant: EuvButtonVariant::Primary
+                            label: "Exit"
+                            onclick: game_3d_on_exit_fullscreen(canvas_2d_fullscreen)
+                        }
+                    }
                 }
             }
             div {
@@ -202,6 +222,11 @@ fn game_3d_canvas_tab() -> VirtualNode {
                     variant: EuvButtonVariant::Primary
                     label: "Reset Camera"
                     onclick: on_reset_camera
+                }
+                euv_button {
+                    variant: EuvButtonVariant::Primary
+                    label: "Enter Fullscreen"
+                    onclick: game_3d_on_enter_fullscreen(fullscreen, canvas_2d_fullscreen)
                 }
             }
         }
@@ -222,8 +247,9 @@ fn game_3d_canvas_tab() -> VirtualNode {
 /// # Arguments
 ///
 /// - `UseGame3DWebGpu` - A `UseGame3DWebGpu` parameter.
-fn game_3d_webgpu_tab(state: UseGame3DWebGpu) -> VirtualNode {
+fn game_3d_webgpu_tab(state: UseGame3DWebGpu, fullscreen: UseGame3DFullscreen) -> VirtualNode {
     let game: UseGame3D = use_game_3d_state();
+    let web_gpu_fullscreen: Signal<bool> = fullscreen.get_web_gpu();
     let cubes_store: Signal<CubeStore> = App::use_signal(|| {
         let cubes: Rc<RefCell<Vec<Cube3D>>> = Rc::new(RefCell::new(create_initial_cubes()));
         CubeStore(cubes)
@@ -296,23 +322,40 @@ fn game_3d_webgpu_tab(state: UseGame3DWebGpu) -> VirtualNode {
                 }
             }
             div {
-                class: c_game_canvas_wrapper(&format!("{GAME_3D_CANVAS_WIDTH} / {GAME_3D_CANVAS_HEIGHT}"))
-                canvas {
-                    id: GAME_3D_WEBGPU_CANVAS_ID
-                    class: c_game_3d_canvas()
-                    onmousedown: on_pointer_down.clone()
-                    onmousemove: on_pointer_move.clone()
-                    onmouseup: on_pointer_up.clone()
-                    onmouseleave: on_pointer_up.clone()
-                    ontouchstart: on_touch_start.clone()
-                    ontouchmove: on_touch_move.clone()
-                    ontouchend: on_touch_end.clone()
-                    ontouchcancel: on_touch_end.clone()
+                class: if { web_gpu_fullscreen.get() } {
+                    c_game_container_fullscreen()
+                } else {
+                    c_game_canvas_wrapper(&format!("{GAME_3D_CANVAS_WIDTH} / {GAME_3D_CANVAS_HEIGHT}"))
                 }
-                if { !state.get_loaded().get() } {
+                div {
+                    class: c_game_fullscreen_canvas_wrapper()
                     canvas {
-                        id: GAME_3D_WEBGPU_LOADING_CANVAS_ID
-                        class: c_game_loading_overlay()
+                        id: GAME_3D_WEBGPU_CANVAS_ID
+                        class: c_game_3d_canvas()
+                        onmousedown: on_pointer_down.clone()
+                        onmousemove: on_pointer_move.clone()
+                        onmouseup: on_pointer_up.clone()
+                        onmouseleave: on_pointer_up.clone()
+                        ontouchstart: on_touch_start.clone()
+                        ontouchmove: on_touch_move.clone()
+                        ontouchend: on_touch_end.clone()
+                        ontouchcancel: on_touch_end.clone()
+                    }
+                    if { !state.get_loaded().get() } {
+                        canvas {
+                            id: GAME_3D_WEBGPU_LOADING_CANVAS_ID
+                            class: c_game_loading_overlay()
+                        }
+                    }
+                }
+                if { web_gpu_fullscreen.get() } {
+                    div {
+                        class: c_game_fullscreen_toolbar()
+                        euv_button {
+                            variant: EuvButtonVariant::Primary
+                            label: "Exit"
+                            onclick: game_3d_on_exit_fullscreen(web_gpu_fullscreen)
+                        }
                     }
                 }
             }
@@ -332,6 +375,11 @@ fn game_3d_webgpu_tab(state: UseGame3DWebGpu) -> VirtualNode {
                     variant: EuvButtonVariant::Primary
                     label: "Reset Camera"
                     onclick: on_reset_camera
+                }
+                euv_button {
+                    variant: EuvButtonVariant::Primary
+                    label: "Enter Fullscreen"
+                    onclick: game_3d_on_enter_fullscreen(fullscreen, web_gpu_fullscreen)
                 }
             }
         }
@@ -382,8 +430,9 @@ fn webgl_status_text(loaded: bool, active: bool, init_error_code: &str) -> &'sta
 /// # Arguments
 ///
 /// - `UseGame3DWebGl` - A `UseGame3DWebGl` parameter.
-fn game_3d_webgl_tab(state: UseGame3DWebGl) -> VirtualNode {
+fn game_3d_webgl_tab(state: UseGame3DWebGl, fullscreen: UseGame3DFullscreen) -> VirtualNode {
     let game: UseGame3D = use_game_3d_state();
+    let web_gl_fullscreen: Signal<bool> = fullscreen.get_web_gl();
     let cubes_store: Signal<CubeStore> = App::use_signal(|| {
         let cubes: Rc<RefCell<Vec<Cube3D>>> = Rc::new(RefCell::new(create_initial_cubes()));
         CubeStore(cubes)
@@ -456,23 +505,40 @@ fn game_3d_webgl_tab(state: UseGame3DWebGl) -> VirtualNode {
                 }
             }
             div {
-                class: c_game_canvas_wrapper(&format!("{GAME_3D_CANVAS_WIDTH} / {GAME_3D_CANVAS_HEIGHT}"))
-                canvas {
-                    id: GAME_3D_WEBGL_CANVAS_ID
-                    class: c_game_3d_canvas()
-                    onmousedown: on_pointer_down.clone()
-                    onmousemove: on_pointer_move.clone()
-                    onmouseup: on_pointer_up.clone()
-                    onmouseleave: on_pointer_up.clone()
-                    ontouchstart: on_touch_start.clone()
-                    ontouchmove: on_touch_move.clone()
-                    ontouchend: on_touch_end.clone()
-                    ontouchcancel: on_touch_end.clone()
+                class: if { web_gl_fullscreen.get() } {
+                    c_game_container_fullscreen()
+                } else {
+                    c_game_canvas_wrapper(&format!("{GAME_3D_CANVAS_WIDTH} / {GAME_3D_CANVAS_HEIGHT}"))
                 }
-                if { !state.get_loaded().get() } {
+                div {
+                    class: c_game_fullscreen_canvas_wrapper()
                     canvas {
-                        id: GAME_3D_WEBGL_LOADING_CANVAS_ID
-                        class: c_game_loading_overlay()
+                        id: GAME_3D_WEBGL_CANVAS_ID
+                        class: c_game_3d_canvas()
+                        onmousedown: on_pointer_down.clone()
+                        onmousemove: on_pointer_move.clone()
+                        onmouseup: on_pointer_up.clone()
+                        onmouseleave: on_pointer_up.clone()
+                        ontouchstart: on_touch_start.clone()
+                        ontouchmove: on_touch_move.clone()
+                        ontouchend: on_touch_end.clone()
+                        ontouchcancel: on_touch_end.clone()
+                    }
+                    if { !state.get_loaded().get() } {
+                        canvas {
+                            id: GAME_3D_WEBGL_LOADING_CANVAS_ID
+                            class: c_game_loading_overlay()
+                        }
+                    }
+                }
+                if { web_gl_fullscreen.get() } {
+                    div {
+                        class: c_game_fullscreen_toolbar()
+                        euv_button {
+                            variant: EuvButtonVariant::Primary
+                            label: "Exit"
+                            onclick: game_3d_on_exit_fullscreen(web_gl_fullscreen)
+                        }
                     }
                 }
             }
@@ -492,6 +558,11 @@ fn game_3d_webgl_tab(state: UseGame3DWebGl) -> VirtualNode {
                     variant: EuvButtonVariant::Primary
                     label: "Reset Camera"
                     onclick: on_reset_camera
+                }
+                euv_button {
+                    variant: EuvButtonVariant::Primary
+                    label: "Enter Fullscreen"
+                    onclick: game_3d_on_enter_fullscreen(fullscreen, web_gl_fullscreen)
                 }
             }
         }

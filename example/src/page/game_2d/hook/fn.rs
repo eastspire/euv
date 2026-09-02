@@ -107,6 +107,52 @@ pub(crate) fn game_2d_on_toggle_pause(state: UseGame2D) -> Option<Rc<dyn Fn(Even
     }))
 }
 
+/// Creates a click event handler that enters landscape fullscreen mode for the 2D game.
+///
+/// Delegates to [`enter_game_2d_fullscreen`], which sets the active tab's
+/// fullscreen signal, pushes a history entry, and reapplies safe-area
+/// insets to the newly-mounted overlay container. The canvas itself is
+/// not recreated — the running game loop, ball list, FPS counter, and
+/// pause state all survive the transition.
+///
+/// # Arguments
+///
+/// - `UseGame2DFullscreen` - The 2D game fullscreen state.
+/// - `Signal<bool>` - The fullscreen signal for the active tab.
+///
+/// # Returns
+///
+/// - `Option<Rc<dyn Fn(Event)>>` - A click handler.
+pub(crate) fn game_2d_on_enter_fullscreen(
+    state: UseGame2DFullscreen,
+    tab: Signal<bool>,
+) -> Option<Rc<dyn Fn(Event)>> {
+    Some(Rc::new(move |_: Event| {
+        enter_game_2d_fullscreen(state, tab);
+    }))
+}
+
+/// Creates a click event handler that exits landscape fullscreen mode for the 2D game.
+///
+/// Delegates to [`exit_game_2d_fullscreen`], which clears the active
+/// tab's fullscreen signal and reapplies safe-area insets. The
+/// `history.back()` call inside [`Router::overlay_back`] consumes the
+/// browser history entry that was pushed on enter.
+///
+/// # Arguments
+///
+/// - `Signal<bool>` - The fullscreen signal for the active tab.
+///
+/// # Returns
+///
+/// - `Option<Rc<dyn Fn(Event)>>` - A click handler.
+pub(crate) fn game_2d_on_exit_fullscreen(tab: Signal<bool>) -> Option<Rc<dyn Fn(Event)>> {
+    Some(Rc::new(move |_: Event| {
+        exit_game_2d_fullscreen(tab);
+        Router::overlay_back(None);
+    }))
+}
+
 /// Creates a click event handler that clears all balls from the canvas.
 ///
 /// # Arguments
@@ -1309,6 +1355,109 @@ pub(crate) fn start_game_2d_webgpu_loop(
             .unwrap_or_default();
         raf_id.set(Some(start_id));
     });
+}
+
+/// Creates the 2D game fullscreen reactive state signals.
+///
+/// Allocates hook slots in this fixed order:
+/// 1. canvas_2d
+/// 2. web_gl
+/// 3. web_gpu
+///
+/// # Returns
+///
+/// - `UseGame2DFullscreen` - A `UseGame2DFullscreen` value.
+pub(crate) fn use_game_2d_fullscreen_state() -> UseGame2DFullscreen {
+    UseGame2DFullscreen {
+        canvas_2d: App::use_signal(|| false),
+        web_gl: App::use_signal(|| false),
+        web_gpu: App::use_signal(|| false),
+    }
+}
+
+/// Enters landscape fullscreen mode for the 2D game on the active tab.
+///
+/// Sets the tab-specific fullscreen signal, pushes a browser history
+/// entry so the system back button exits fullscreen instead of
+/// navigating away, then flushes the cached safe-area insets to the
+/// newly-mounted overlay container. Crucially, the canvas element is
+/// *not* recreated — the active tab's `<canvas>` is re-keyed to live
+/// inside `c_game_container_fullscreen` instead of its inline slot, so
+/// the running game loop, ball list, FPS counter, and pause state all
+/// survive the transition.
+///
+/// # Arguments
+///
+/// - `UseGame2DFullscreen` - The 2D game fullscreen state.
+/// - `Signal<bool>` - The fullscreen signal for the active tab.
+pub(crate) fn enter_game_2d_fullscreen(state: UseGame2DFullscreen, tab: Signal<bool>) {
+    tab.set(true);
+    let _ = state;
+    Router::overlay_push_state();
+    UseEuvLayout::apply_cached_insets();
+}
+
+/// Exits landscape fullscreen mode for the 2D game on the active tab.
+///
+/// Used by the in-overlay Exit button. Clears the active tab's fullscreen
+/// signal and re-applies the safe-area insets to whatever overlay
+/// containers are now mounted.
+///
+/// # Arguments
+///
+/// - `Signal<bool>` - The fullscreen signal for the active tab.
+pub(crate) fn exit_game_2d_fullscreen(tab: Signal<bool>) {
+    tab.set(false);
+    UseEuvLayout::apply_cached_insets();
+}
+
+/// Exits landscape fullscreen mode without consuming a browser history
+/// entry. Used when the exit is triggered by the system back button:
+/// the `popstate` event itself has already consumed the `pushState`
+/// entry that was created when entering fullscreen, so calling
+/// `history.back()` again would over-consume the history stack.
+///
+/// # Arguments
+///
+/// - `Signal<bool>` - The fullscreen signal for the active tab.
+pub(crate) fn exit_game_2d_fullscreen_from_popstate(tab: Signal<bool>) {
+    tab.set(false);
+    UseEuvLayout::apply_cached_insets();
+}
+
+/// Subscribes to browser `popstate` events to handle the system back
+/// button while the 2D game is in landscape fullscreen mode.
+///
+/// Watches all three tab-specific fullscreen signals. When any one is
+/// `true`, the corresponding `exit_game_2d_fullscreen_from_popstate`
+/// runs and the guard returns `true` to consume the `popstate` event.
+/// Otherwise returns `false` so the overlay stack or router can handle
+/// the back navigation normally.
+///
+/// Returns the guard ID so the page can unregister it on unmount.
+///
+/// # Arguments
+///
+/// - `UseGame2DFullscreen` - The 2D game fullscreen state.
+///
+/// # Returns
+///
+/// - `usize` - The popstate guard ID.
+pub(crate) fn use_game_2d_fullscreen_popstate(state: UseGame2DFullscreen) -> usize {
+    Router::register_popstate_guard(Rc::new(move || {
+        if state.get_canvas_2d().get() {
+            exit_game_2d_fullscreen_from_popstate(state.get_canvas_2d());
+            true
+        } else if state.get_web_gl().get() {
+            exit_game_2d_fullscreen_from_popstate(state.get_web_gl());
+            true
+        } else if state.get_web_gpu().get() {
+            exit_game_2d_fullscreen_from_popstate(state.get_web_gpu());
+            true
+        } else {
+            false
+        }
+    }))
 }
 
 /// Starts the 2D WebGL bouncing balls loop driven by `requestAnimationFrame`.

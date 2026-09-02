@@ -37,6 +37,15 @@ class! {
         aspect-ratio: aspect_ratio;
     }
 
+    pub c_game_fullscreen_canvas_wrapper {
+        flex: "1";
+        display: "flex";
+        align-items: "center";
+        justify-content: "center";
+        overflow: "hidden";
+        min-height: "0";
+    }
+
     pub c_game_3d_canvas {
         width: "100%";
         height: "100%";

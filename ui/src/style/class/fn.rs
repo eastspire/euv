@@ -1327,6 +1327,55 @@ class! {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // Game Fullscreen (2D / 3D)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    // Fullscreen overlay container for the 2D and 3D game pages.
+    //
+    // Mirrors `c_canvas_container_fullscreen` so the safe-area caching
+    // pass in `UseEuvLayout::apply_cached_insets` can pick this selector
+    // up alongside the canvas one. Differs in that the game overlay holds
+    // the *same* `<canvas>` element that the inline page mounts (no
+    // canvas re-creation), so the running game loop, balls, cubes, FPS
+    // counter and other reactive state survive the fullscreen toggle
+    // without reset.
+    pub c_game_container_fullscreen {
+        width: "100%";
+        height: "100%";
+        background: var!(background);
+        display: "flex";
+        flex-direction: "column";
+        position: "fixed";
+        top: "0";
+        left: "0";
+        z-index: "10002";
+        padding: format!(
+        "{} {} {} {}",
+        var!(padding-shell-top),
+        var!(space-lg),
+        var!(padding-shell-bottom),
+        var!(space-lg)
+        );
+        box-sizing: "border-box";
+    }
+
+    // Toolbar wrapping the fullscreen exit button on game pages.
+    //
+    // Game pages only need an `Exit` button here (no color picker / line
+    // width control like the canvas drawing board), so the layout is a
+    // single horizontal row at the bottom of the overlay.
+    pub c_game_fullscreen_toolbar {
+        display: "flex";
+        align-items: "center";
+        justify-content: "flex-end";
+        width: "100%";
+        padding: format!("{} {} {} {}", var!(space-xs), var!(space-lg), var!(space-xs), var!(space-lg));
+        flex-shrink: "0";
+        gap: var!(space-sm);
+        box-sizing: "border-box";
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // Custom Attrs Demo
     // ═══════════════════════════════════════════════════════════════════════════
 
@@ -3519,16 +3568,16 @@ class! {
         top: "44px";
         right: "0px";
         /* `width: 100%` instead of `min-width: 140px` so the menu
-                       matches the dropdown container (and therefore the
-                       trigger button) width exactly. With only `min-width`,
-                       a trigger wider than 140px (e.g. the 206px-wide
-                       nav-column locale switcher button) leaves a large
-                       empty gap on the left of the menu, since `right: 0`
-                       anchors only the right edge to the container. With
-                       `width: 100%`, the menu's left edge lines up with the
-                       trigger's left edge. The default minimum content width
-                       is still guaranteed by the inner items' own padding,
-                       so we keep the rule without an explicit min. */
+                           matches the dropdown container (and therefore the
+                           trigger button) width exactly. With only `min-width`,
+                           a trigger wider than 140px (e.g. the 206px-wide
+                           nav-column locale switcher button) leaves a large
+                           empty gap on the left of the menu, since `right: 0`
+                           anchors only the right edge to the container. With
+                           `width: 100%`, the menu's left edge lines up with the
+                           trigger's left edge. The default minimum content width
+                           is still guaranteed by the inner items' own padding,
+                           so we keep the rule without an explicit min. */
         width: "100%";
         background: var!(background);
         border: format!("1px solid {}", var!(border));
