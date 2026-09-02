@@ -1208,21 +1208,40 @@ fn pack_game_3d_cubes_uniform(cubes: &[Cube3D], camera: &Camera3D) -> Vec<f32> {
     data
 }
 
-/// Creates a click event handler that selects a tab on the 3D game page.
+/// Creates a click event handler that sets the active tab and exits
+/// any in-flight landscape fullscreen mode before switching.
+///
+/// Tab switches destroy the previous arm's DOM subtree (the match
+/// expression rebuilds from scratch on arm change), so any tab's
+/// `c_game_container_fullscreen` overlay is unmounted along with the
+/// rest of that arm. The per-tab fullscreen signals are page-scoped
+/// `Signal<bool>` instances, however — they survive arm destruction
+/// because they are registered with the page-level HookContext, not
+/// the per-arm one. Without explicit cleanup the next time the user
+/// revisits that tab the overlay re-mounts even though they did not
+/// press Enter Fullscreen again. Clearing all three signals on every
+/// tab change keeps fullscreen state strictly co-extensive with the
+/// user's last explicit enter/exit action.
 ///
 /// # Arguments
 ///
 /// - `Signal<Game3DTab>` - The tab signal to update.
 /// - `Game3DTab` - The tab variant to set.
+/// - `UseGame3DFullscreen` - The fullscreen state to clear on switch.
 ///
 /// # Returns
 ///
-/// - `Option<Rc<dyn Fn(Event)>>` - A click handler that sets the active tab.
+/// - `Option<Rc<dyn Fn(Event)>>` - A click handler that sets the active
+///   tab and clears any active fullscreen mode.
 pub(crate) fn game_3d_on_tab_select(
     tab: Signal<Game3DTab>,
     value: Game3DTab,
+    fullscreen: UseGame3DFullscreen,
 ) -> Option<Rc<dyn Fn(Event)>> {
     Some(Rc::new(move |_: Event| {
+        fullscreen.get_canvas_2d().set(false);
+        fullscreen.get_web_gl().set(false);
+        fullscreen.get_web_gpu().set(false);
         tab.set(value);
     }))
 }
