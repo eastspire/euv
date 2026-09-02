@@ -58,11 +58,17 @@ impl Renderer {
     /// Otherwise, creates new DOM nodes from scratch and appends them to the root.
     ///
     /// OPT 1 (zero-copy VDOM): the owned `VirtualNode` is moved into
-    /// `unwrap_component_owned`, which expands any `Tag::Component` markers
-    /// in a single fused pass without an intermediate `subtree_has_component`
-    /// pre-walk. Component-free trees are returned by move — only the edges
-    /// of the recursive descent allocate (the edge clone performed when a
-    /// component expands into its single child).
+    /// `unwrap_component_owned`, which first performs a cheap
+    /// zero-allocation pre-scan via [`Self::subtree_has_component`] to
+    /// detect any `Tag::Component` markers. Component-free trees (the
+    /// common case for `html!` closures that use only native elements)
+    /// are returned by move without touching a single `Vec` — the deep
+    /// tree's `Vec` allocations, `Tag` strings, and attribute vectors
+    /// are all reused by the renderer. Trees that actually contain
+    /// components pay the rebuild cost via
+    /// [`Self::unwrap_component_owned_slow`], where the edge clone
+    /// happens only along the descent path that touches a component
+    /// wrapper, not over the whole tree.
     ///
     /// # Arguments
     ///
@@ -922,25 +928,22 @@ impl Renderer {
     /// OPT 1: this is the single fused expansion entry point. Two
     /// notable performance characteristics:
     ///
-    /// 1. **No pre-walk.** Component detection and expansion happen in
-    ///    one pass — the recursion carries the dispatch decision
-    ///    through its match arms, so we never spend an extra walk just
-    ///    to ask "is there a `Tag::Component` in this subtree?".
+    /// 1. **Zero-allocation pre-scan.** `subtree_has_component` walks
+    ///    the tree by shared reference first; component-free trees
+    ///    (the common case for `html!` closures that use only native
+    ///    elements) are returned by move without touching a single
+    ///    `Vec`. The previous "fused" implementation rebuilt every
+    ///    `children` / `Fragment` vector via `into_iter().map().collect()`
+    ///    on every render — one fresh `Vec` allocation per element per
+    ///    render even when no `Tag::Component` existed anywhere in the
+    ///    subtree.
     ///
-    /// 2. **Component-free fast path.** When the input has no
-    ///    `Tag::Component`, every match arm's `other => other` branch
-    ///    (Text / Empty) or the `_` non-component branch returns the
-    ///    owned `VirtualNode` by move, zero `clone()` calls. The deep
-    ///    tree's `Vec` allocations, `Tag` strings, and attribute vectors
-    ///    are all reused by the renderer.
-    ///
-    /// The only allocation in the component-free case is the
-    /// `Box<dyn FnMut()>` owned by any `DynamicNode` payloads that
-    /// happen to be present (which is unrelated to component
-    /// expansion). Component expansion itself adds a single edge clone
-    /// per `Tag::Component` node — the original wrapper is dropped, and
-    /// its single child (or fragment of children) is moved into the
-    /// parent position.
+    /// 2. **Component-free fast path.** When the pre-scan finds no
+    ///    `Tag::Component`, the owned `VirtualNode` is returned
+    ///    untouched: the deep tree's `Vec` allocations, `Tag` strings,
+    ///    and attribute vectors are all reused by the renderer. Only
+    ///    trees that actually contain components pay the rebuild cost,
+    ///    and the pre-scan short-circuits at the first component found.
     ///
     /// # Arguments
     ///
@@ -950,6 +953,57 @@ impl Renderer {
     ///
     /// - `VirtualNode` - The unwrapped virtual node with all components expanded.
     fn unwrap_component_owned(node: VirtualNode) -> VirtualNode {
+        if !Self::subtree_has_component(&node) {
+            return node;
+        }
+        Self::unwrap_component_owned_slow(node)
+    }
+
+    /// Read-only walk that answers "does this subtree contain any
+    /// `Tag::Component` marker?" without allocating.
+    ///
+    /// `VirtualNode::Dynamic` is treated as a leaf: dynamic closures
+    /// produce a fresh tree on every invocation, and that tree passes
+    /// through `unwrap_component_owned` again inside the dynamic
+    /// render path, so descending into the (not yet rendered) closure
+    /// payload here is both impossible and unnecessary.
+    ///
+    /// # Arguments
+    ///
+    /// - `&VirtualNode` - The node to inspect.
+    ///
+    /// # Returns
+    ///
+    /// - `bool` - `true` when a component marker exists in the subtree.
+    fn subtree_has_component(node: &VirtualNode) -> bool {
+        match node {
+            VirtualNode::Element {
+                tag: Tag::Component(_),
+                ..
+            } => true,
+            VirtualNode::Element { children, .. } => {
+                children.iter().any(Self::subtree_has_component)
+            }
+            VirtualNode::Fragment(children) => children.iter().any(Self::subtree_has_component),
+            _ => false,
+        }
+    }
+
+    /// Allocating expansion pass, entered only when
+    /// [`Self::subtree_has_component`] proved a component exists.
+    ///
+    /// Each `Tag::Component` wrapper is replaced by its single child
+    /// (moved) or by a `Fragment` of its children; native-element
+    /// children vectors are rebuilt exactly once along the descent.
+    ///
+    /// # Arguments
+    ///
+    /// - `VirtualNode` - The owned virtual node to expand.
+    ///
+    /// # Returns
+    ///
+    /// - `VirtualNode` - The expanded virtual node.
+    fn unwrap_component_owned_slow(node: VirtualNode) -> VirtualNode {
         match node {
             VirtualNode::Element {
                 tag: Tag::Component(_),
