@@ -1,6 +1,6 @@
 [package]
 name = "euv-macros"
-version = "0.18.47"
+version = "0.18.48"
 readme = "README.md"
 edition = "2024"
 authors = ["root@ltpp.vip"]
