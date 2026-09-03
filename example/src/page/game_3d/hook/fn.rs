@@ -1,13 +1,24 @@
 use super::*;
 
-/// Reads the current CSS pixel dimensions (clientWidth, clientHeight)
-/// of the canvas element matching the given selector.
+/// Reads the canvas element's CSS layout dimensions.
 ///
-/// Mirrors `crate::page::game_2d::hook::read_canvas_size`. Kept as a
-/// duplicate here so the game_2d and game_3d hook modules can be
-/// reviewed / maintained independently without one depending on the
-/// other. Used to size the SSAA backing buffer in both inline and
-/// fullscreen layouts.
+/// Uses `getBoundingClientRect()` to read the actual CSS box size
+/// (width/height after layout), not `clientWidth`/`clientHeight` which
+/// in Chrome track `canvas.width`/`canvas.height` (the backing-store
+/// size). Reading the CSS box is critical during fullscreen
+/// transitions: the moment the user clicks Enter Fullscreen the CSS
+/// layout flips to the new size, but the canvas backing store still
+/// holds the previous size. If we used `clientWidth` here, the
+/// `WebGlRenderer::resize` / `WebGpuRenderer::resize` calls driven by
+/// the debounced resize tick would receive the OLD backing dimensions
+/// (already matching `canvas.width`), `if` check passes, no resize
+/// happens, and the browser stretches the previous-size backing image
+/// into the new CSS box - producing a visible first-frame cube
+/// distortion that only recovers once the next debounced resize tick
+/// reads the new CSS dimensions. `getBoundingClientRect` returns the
+/// target CSS size immediately so the per-frame safety net in
+/// `start_game_3d_webgl_loop` / `start_game_3d_webgpu_loop` can resize
+/// the backing store to match on the very first frame.
 ///
 /// # Arguments
 ///
@@ -24,7 +35,8 @@ pub(crate) fn read_canvas_size(canvas_selector: &str) -> Option<(f64, f64)> {
         .ok()
         .flatten()?;
     let canvas: HtmlCanvasElement = element.unchecked_into();
-    Some((canvas.client_width() as f64, canvas.client_height() as f64))
+    let rect: DomRect = canvas.get_bounding_client_rect();
+    Some((rect.width(), rect.height()))
 }
 
 /// Creates the 3D game reactive state signals wrapped in a `UseGame3D` struct.
@@ -1568,17 +1580,34 @@ pub(crate) fn start_game_3d_webgpu_loop(
             // `borrow_mut()` call that previously panicked with
             // `RefCell already borrowed`.
             if let Some(renderer) = renderer_for_loop.borrow_mut().as_mut() {
-                // Only re-size the backing store when the debounced
-                // resize event fired. We deliberately do NOT call
-                // sync_to_current_canvas() on every frame because
-                // `HTMLCanvasElement.clientWidth` in Chrome tracks
-                // `canvas.width` (the backing-store size), NOT the
-                // CSS layout box, so a sync loop would read its own
-                // writes and grow the texture exponentially each
-                // frame until WebGPU caps at maxTextureDimension2D
-                // and reports `Texture size exceeded`. The init-time
-                // backing store already accounts for `dpr`, so a
-                // non-resize frame needs no work here.
+                // Resize the WebGPU backing store every frame the CSS box
+                // diverges from `canvas.width` / `canvas.height`. Reading
+                // `getBoundingClientRect` (CSS layout box, not backing
+                // store) means this comparison is stable: a resize only
+                // fires when the layout actually changes, not when our own
+                // `canvas.width` write updates the backing store.
+                //
+                // Without this per-frame check, the synthetic `resize`
+                // event dispatched by `enter_game_3d_fullscreen` /
+                // `exit_game_3d_fullscreen` fires before the euv
+                // signal-driven DOM re-render flips the canvas CSS class
+                // (100ms debounce). During that gap the canvas DOM
+                // element already has its new CSS box but the backing
+                // store still holds the previous size, so the browser
+                // stretches the OLD-size backing image into the NEW CSS
+                // box - producing a visible first-frame cube distortion
+                // (~120ms) that only recovers once the debounced resize
+                // tick reads the new CSS dimensions and resizes.
+                //
+                // Resizing here on the very first frame we observe the
+                // CSS change collapses the distortion to a single frame.
+                if new_physical_width > 0 && new_physical_height > 0 {
+                    let backing_w: u32 = renderer.get_canvas().width();
+                    let backing_h: u32 = renderer.get_canvas().height();
+                    if backing_w != new_physical_width || backing_h != new_physical_height {
+                        let _ = renderer.resize(new_physical_width, new_physical_height);
+                    }
+                }
                 if resize_dirty {
                     let _ = renderer.resize(new_physical_width, new_physical_height);
                 }
@@ -1868,15 +1897,46 @@ pub(crate) fn start_game_3d_webgl_loop(
             .and_then(|value: JsValue| value.as_f64())
             .filter(|value: &f64| value.is_finite() && *value >= 1.0)
             .unwrap_or(1.0);
-            // Read the canvas's CSS pixel dimensions (clientWidth / clientHeight)
-            // so the GPU backing store grows with the canvas when the user
-            // enters or exits fullscreen. Mirrors the same swap in
-            // game_2d/hook/fn.rs and in the WebGPU loop above.
+            // Read the canvas's CSS pixel dimensions via
+            // `getBoundingClientRect` (NOT `clientWidth`/`clientHeight` -
+            // the latter in Chrome track `canvas.width`, the backing-store
+            // size, and would create a feedback loop if read every frame).
+            // `getBoundingClientRect` returns the CSS box which is in sync
+            // with layout, so the resize below only fires when the layout
+            // actually changes - it does NOT loop.
             let (canvas_width, canvas_height): (f64, f64) =
                 read_canvas_size(GAME_3D_WEBGL_CANVAS_SELECTOR).unwrap_or((0.0, 0.0));
             let new_physical_width: u32 = (canvas_width * dpr).round() as u32;
             let new_physical_height: u32 = (canvas_height * dpr).round() as u32;
             if let Some(renderer) = renderer_for_loop.borrow_mut().as_mut() {
+                // Resize the WebGL backing store every frame the CSS box
+                // diverges from `canvas.width` / `canvas.height`. Reading
+                // `getBoundingClientRect` (CSS layout box, not backing
+                // store) means this comparison is stable: a resize only
+                // fires when the layout actually changes, not when our own
+                // `canvas.width` write updates the backing store.
+                //
+                // Without this per-frame check, the synthetic `resize`
+                // event dispatched by `enter_game_3d_fullscreen` /
+                // `exit_game_3d_fullscreen` fires before the euv
+                // signal-driven DOM re-render flips the canvas CSS class
+                // (100ms debounce). During that gap the canvas DOM
+                // element already has its new CSS box but the backing
+                // store still holds the previous size, so the browser
+                // stretches the OLD-size backing image into the NEW CSS
+                // box - producing a visible first-frame cube distortion
+                // (~120ms) that only recovers once the debounced resize
+                // tick reads the new CSS dimensions and resizes.
+                //
+                // Resizing here on the very first frame we observe the
+                // CSS change collapses the distortion to a single frame.
+                if new_physical_width > 0 && new_physical_height > 0 {
+                    let backing_w: u32 = renderer.get_canvas().width();
+                    let backing_h: u32 = renderer.get_canvas().height();
+                    if backing_w != new_physical_width || backing_h != new_physical_height {
+                        renderer.resize(new_physical_width, new_physical_height);
+                    }
+                }
                 if resize_dirty {
                     renderer.resize(new_physical_width, new_physical_height);
                 }
