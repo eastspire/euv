@@ -186,7 +186,11 @@ fn game_3d_canvas_tab(fullscreen: UseGame3DFullscreen) -> VirtualNode {
                         class: c_game_fullscreen_canvas_letterbox()
                         canvas {
                             id: GAME_3D_CANVAS_ID
-                            class: c_game_3d_canvas()
+                            class: if { canvas_2d_fullscreen.get() } {
+                                c_game_3d_canvas_fullscreen()
+                            } else {
+                                c_game_3d_canvas()
+                            }
                             onmousedown: on_pointer_down.clone()
                             onmousemove: on_pointer_move.clone()
                             onmouseup: on_pointer_up.clone()
@@ -336,7 +340,11 @@ fn game_3d_webgpu_tab(state: UseGame3DWebGpu, fullscreen: UseGame3DFullscreen) -
                         class: c_game_fullscreen_canvas_letterbox()
                         canvas {
                             id: GAME_3D_WEBGPU_CANVAS_ID
-                            class: c_game_3d_canvas()
+                            class: if { web_gpu_fullscreen.get() } {
+                                c_game_3d_canvas_fullscreen()
+                            } else {
+                                c_game_3d_canvas()
+                            }
                             onmousedown: on_pointer_down.clone()
                             onmousemove: on_pointer_move.clone()
                             onmouseup: on_pointer_up.clone()
@@ -522,7 +530,11 @@ fn game_3d_webgl_tab(state: UseGame3DWebGl, fullscreen: UseGame3DFullscreen) -> 
                         class: c_game_fullscreen_canvas_letterbox()
                         canvas {
                             id: GAME_3D_WEBGL_CANVAS_ID
-                            class: c_game_3d_canvas()
+                            class: if { web_gl_fullscreen.get() } {
+                            c_game_3d_canvas_fullscreen()
+                        } else {
+                            c_game_3d_canvas()
+                        }
                             onmousedown: on_pointer_down.clone()
                             onmousemove: on_pointer_move.clone()
                             onmouseup: on_pointer_up.clone()
