@@ -27,12 +27,26 @@ pub(crate) fn random_ball_color() -> &'static str {
 
 /// Returns a random ball radius within the allowed range.
 ///
+/// The constants `GAME_2D_BALL_MIN_RADIUS` / `GAME_2D_BALL_MAX_RADIUS`
+/// express the desired ball radius range as a fraction of the canvas
+/// width: 8 / 600 = 1.33% and 30 / 600 = 5% of a 600px-wide default
+/// canvas. Multiplying by the live canvas width keeps balls looking
+/// proportionally the same in both inline (~820px) and fullscreen
+/// (~1248px) layouts, instead of being a fixed pixel size that appears
+/// disproportionately large in the smaller canvas and disproportionately
+/// small in the larger one.
+///
 /// # Returns
 ///
-/// - `f64` - The radius in pixels.
+/// - `f64` - The radius in CSS pixels, scaled to the current canvas width.
 pub(crate) fn random_ball_radius() -> f64 {
     let raw: f64 = js_sys::Math::random();
-    GAME_2D_BALL_MIN_RADIUS + raw * (GAME_2D_BALL_MAX_RADIUS - GAME_2D_BALL_MIN_RADIUS)
+    let fraction: f64 =
+        GAME_2D_BALL_MIN_RADIUS + raw * (GAME_2D_BALL_MAX_RADIUS - GAME_2D_BALL_MIN_RADIUS);
+    let canvas_width: f64 = read_canvas_size(GAME_2D_CANVAS_SELECTOR)
+        .map(|(w, _)| w)
+        .unwrap_or(GAME_2D_CANVAS_WIDTH);
+    fraction * (canvas_width / GAME_2D_CANVAS_WIDTH)
 }
 
 /// Creates a new ball at the given position with a random upward velocity.
@@ -377,6 +391,75 @@ pub(crate) fn resolve_wall_collision(ball: &mut Ball, canvas_width: f64, canvas_
         ball.position.set_y(canvas_height - ball.radius);
         let velocity_y: f64 = ball.velocity.get_y();
         ball.velocity.set_y(-velocity_y.abs() * GAME_2D_RESTITUTION);
+    }
+}
+
+/// Rescales ball positions and radii so they remain proportional when
+/// the canvas switches between inline (~820x547) and fullscreen
+/// (~1248x750) layouts.
+///
+/// Without this scaling, balls that were spawned in fullscreen retain
+/// their fullscreen coordinates after exiting, and `resolve_wall_collision`
+/// clamps them all to the floor of the smaller inline canvas — producing
+/// a dense pile-up that the impulse solver cannot separate (balls all want
+/// the same y, gravity keeps pulling them back, collision iterations are
+/// bounded). The ball radius also looks disproportionately large in the
+/// smaller canvas because it stays at the absolute `MIN_RADIUS..MAX_RADIUS`
+/// pixel range instead of scaling with the canvas.
+///
+/// `old_width` / `old_height` are the canvas dimensions the balls were
+/// last physics-stepped against; `new_width` / `new_height` are the
+/// dimensions they will be physics-stepped against next. The ball's
+/// `position` is rescaled by `new/old` per axis, and `radius` is scaled
+/// by the smaller of the two ratios so balls stay inside the new bounds
+/// even when their parent ball had been placed in the corner.
+///
+/// The `prev_positions` buffer is rescaled in lockstep so the
+/// interpolate_balls extrapolation between physics steps keeps producing
+/// visually consistent positions across the resize.
+///
+/// # Arguments
+///
+/// - `&mut [Ball]` - The mutable ball list.
+/// - `&mut Vec<Vector2D>` - The previous-step position buffer.
+/// - `f64` - The previous canvas width in CSS pixels.
+/// - `f64` - The previous canvas height in CSS pixels.
+/// - `f64` - The new canvas width in CSS pixels.
+/// - `f64` - The new canvas height in CSS pixels.
+pub(crate) fn rescale_balls_to_canvas(
+    balls: &mut [Ball],
+    prev_positions: &mut [Vector2D],
+    old_width: f64,
+    old_height: f64,
+    new_width: f64,
+    new_height: f64,
+) {
+    if old_width <= 0.0 || old_height <= 0.0 || new_width <= 0.0 || new_height <= 0.0 {
+        return;
+    }
+    let scale_x: f64 = new_width / old_width;
+    let scale_y: f64 = new_height / old_height;
+    let radius_scale: f64 = scale_x.min(scale_y);
+    for ball in balls.iter_mut() {
+        ball.position.set_x(ball.position.get_x() * scale_x);
+        ball.position.set_y(ball.position.get_y() * scale_y);
+        ball.radius *= radius_scale;
+        let max_x: f64 = (new_width - ball.radius).max(ball.radius);
+        let max_y: f64 = (new_height - ball.radius).max(ball.radius);
+        if ball.position.get_x() < ball.radius {
+            ball.position.set_x(ball.radius);
+        } else if ball.position.get_x() > max_x {
+            ball.position.set_x(max_x);
+        }
+        if ball.position.get_y() < ball.radius {
+            ball.position.set_y(ball.radius);
+        } else if ball.position.get_y() > max_y {
+            ball.position.set_y(max_y);
+        }
+    }
+    for prev in prev_positions.iter_mut() {
+        prev.set_x(prev.get_x() * scale_x);
+        prev.set_y(prev.get_y() * scale_y);
     }
 }
 
@@ -737,6 +820,10 @@ pub(crate) fn start_game_2d_loop(
     let raf_id: Rc<Cell<Option<i32>>> = Rc::new(Cell::new(None));
     let closure_cell: RafClosureCell = Rc::new(MaybeEngineCell::new());
     let prev_positions: Rc<RefCell<Vec<Vector2D>>> = Rc::new(RefCell::new(Vec::new()));
+    // Tracks the canvas dimensions the balls were last physics-stepped
+    // against, so a fullscreen <-> inline transition can rescale ball
+    // positions and radii in lockstep with the new backing buffer.
+    let last_canvas_size: Rc<RefCell<(f64, f64)>> = Rc::new(RefCell::new((0.0, 0.0)));
     let acc_clone: Rc<Cell<f64>> = accumulator.clone();
     let last_clone: Rc<Cell<f64>> = last_time.clone();
     let frame_clone: Rc<Cell<u32>> = frame_count.clone();
@@ -746,6 +833,7 @@ pub(crate) fn start_game_2d_loop(
     let context_clone: Rc<RefCell<Option<SsaaCanvas>>> = canvas_ssaa.clone();
     let dirty_clone: Rc<Cell<bool>> = resize_dirty.clone();
     let prev_clone: Rc<RefCell<Vec<Vector2D>>> = prev_positions.clone();
+    let last_canvas_size_clone: Rc<RefCell<(f64, f64)>> = last_canvas_size.clone();
     let raf_closure: Closure<dyn FnMut()> = Closure::wrap(Box::new(move || {
         if game_2d_canvas_detached(GAME_2D_CANVAS_SELECTOR) {
             // The page or tab was navigated away from: cleanups only fire
@@ -785,6 +873,31 @@ pub(crate) fn start_game_2d_loop(
         }
         let alpha: f64 = (acc_clone.get() / GAME_2D_FIXED_TIMESTEP).clamp(0.0, 1.0);
         if dirty_clone.get() {
+            // Capture the upcoming canvas size before dropping the SSAA
+            // wrapper so we can rescale ball positions and radii from the
+            // previous canvas dimensions into the new ones. Without this,
+            // balls spawned in fullscreen remain at their fullscreen
+            // coordinates after exiting to inline, and `resolve_wall_collision`
+            // clamps them all to the floor of the smaller canvas - producing
+            // a dense pile-up that the bounded-iteration impulse solver
+            // cannot separate. Scaling the radius alongside the position
+            // also keeps the visual proportion consistent across layouts.
+            let new_size: (f64, f64) =
+                read_canvas_size(GAME_2D_CANVAS_SELECTOR).unwrap_or((0.0, 0.0));
+            let (old_w, old_h) = *last_canvas_size_clone.borrow();
+            if old_w > 0.0 && old_h > 0.0 && new_size.0 > 0.0 && new_size.1 > 0.0 {
+                rescale_balls_to_canvas(
+                    &mut balls.borrow_mut(),
+                    &mut prev_clone.borrow_mut(),
+                    old_w,
+                    old_h,
+                    new_size.0,
+                    new_size.1,
+                );
+            }
+            if new_size.0 > 0.0 && new_size.1 > 0.0 {
+                *last_canvas_size_clone.borrow_mut() = new_size;
+            }
             *context_clone.borrow_mut() = None;
             *canvas_cache.0.borrow_mut() = None;
             dirty_clone.set(false);
@@ -1329,6 +1442,11 @@ pub(crate) fn start_game_2d_webgpu_loop(
         let cancelled_for_loop: Rc<Cell<bool>> = cancelled.clone();
         let prev_positions: Rc<RefCell<Vec<Vector2D>>> = Rc::new(RefCell::new(Vec::new()));
         let prev_for_loop: Rc<RefCell<Vec<Vector2D>>> = prev_positions.clone();
+        // Tracks the canvas dimensions the balls were last physics-stepped
+        // against, so a fullscreen <-> inline transition can rescale ball
+        // positions and radii in lockstep with the new backing buffer.
+        let last_canvas_size: Rc<RefCell<(f64, f64)>> = Rc::new(RefCell::new((0.0, 0.0)));
+        let last_canvas_size_for_loop: Rc<RefCell<(f64, f64)>> = last_canvas_size.clone();
         let raf_closure: Closure<dyn FnMut()> = Closure::wrap(Box::new(move || {
             // Stop on tab-switch cleanup (`cancelled`) or when the canvas
             // left the document (router navigation fires no cleanup).
@@ -1374,6 +1492,32 @@ pub(crate) fn start_game_2d_webgpu_loop(
             // borrowed` when both blocks tried to borrow the same cell.
             let resize_dirty: bool = if resize_dirty_for_loop.get() {
                 resize_dirty_for_loop.set(false);
+                // Rescale ball positions and radii from the previous
+                // canvas size into the new one. Without this, balls
+                // spawned in fullscreen remain at their fullscreen
+                // coordinates after exiting to inline, and the bounded
+                // impulse solver cannot separate them when they pile up
+                // against the floor of the smaller canvas.
+                let (new_w, new_h): (f64, f64) = canvas_cache
+                    .0
+                    .borrow()
+                    .as_ref()
+                    .map(|canvas| (canvas.client_width() as f64, canvas.client_height() as f64))
+                    .unwrap_or((0.0, 0.0));
+                let (old_w, old_h) = *last_canvas_size_for_loop.borrow();
+                if old_w > 0.0 && old_h > 0.0 && new_w > 0.0 && new_h > 0.0 {
+                    rescale_balls_to_canvas(
+                        &mut balls.borrow_mut(),
+                        &mut prev_for_loop.borrow_mut(),
+                        old_w,
+                        old_h,
+                        new_w,
+                        new_h,
+                    );
+                }
+                if new_w > 0.0 && new_h > 0.0 {
+                    *last_canvas_size_for_loop.borrow_mut() = (new_w, new_h);
+                }
                 true
             } else {
                 false
@@ -1780,6 +1924,11 @@ pub(crate) fn start_game_2d_webgl_loop(
         let cancelled_for_loop: Rc<Cell<bool>> = cancelled.clone();
         let prev_positions: Rc<RefCell<Vec<Vector2D>>> = Rc::new(RefCell::new(Vec::new()));
         let prev_for_loop: Rc<RefCell<Vec<Vector2D>>> = prev_positions.clone();
+        // Tracks the canvas dimensions the balls were last physics-stepped
+        // against, so a fullscreen <-> inline transition can rescale ball
+        // positions and radii in lockstep with the new backing buffer.
+        let last_canvas_size: Rc<RefCell<(f64, f64)>> = Rc::new(RefCell::new((0.0, 0.0)));
+        let last_canvas_size_for_loop: Rc<RefCell<(f64, f64)>> = last_canvas_size.clone();
         let raf_closure: Closure<dyn FnMut()> = Closure::wrap(Box::new(move || {
             // Stop on tab-switch cleanup (`cancelled`) or when the canvas
             // left the document (router navigation fires no cleanup).
@@ -1819,6 +1968,32 @@ pub(crate) fn start_game_2d_webgl_loop(
             let alpha: f64 = (acc_clone.get() / GAME_2D_FIXED_TIMESTEP).clamp(0.0, 1.0);
             let resize_dirty: bool = if resize_dirty_for_loop.get() {
                 resize_dirty_for_loop.set(false);
+                // Rescale ball positions and radii from the previous
+                // canvas size into the new one. See the Canvas 2D loop
+                // `start_game_2d_loop` for the full rationale; the same
+                // physics runs here and would otherwise pile balls
+                // against the floor of the smaller canvas after a
+                // fullscreen -> inline transition.
+                let (new_w, new_h): (f64, f64) = canvas_cache
+                    .0
+                    .borrow()
+                    .as_ref()
+                    .map(|canvas| (canvas.client_width() as f64, canvas.client_height() as f64))
+                    .unwrap_or((0.0, 0.0));
+                let (old_w, old_h) = *last_canvas_size_for_loop.borrow();
+                if old_w > 0.0 && old_h > 0.0 && new_w > 0.0 && new_h > 0.0 {
+                    rescale_balls_to_canvas(
+                        &mut balls.borrow_mut(),
+                        &mut prev_for_loop.borrow_mut(),
+                        old_w,
+                        old_h,
+                        new_w,
+                        new_h,
+                    );
+                }
+                if new_w > 0.0 && new_h > 0.0 {
+                    *last_canvas_size_for_loop.borrow_mut() = (new_w, new_h);
+                }
                 true
             } else {
                 false
