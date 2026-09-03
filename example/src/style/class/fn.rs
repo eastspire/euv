@@ -34,20 +34,31 @@ class! {
     pub c_game_canvas_wrapper {
         position: "relative";
         width: "100%";
+        // Inline-mode canvas wrapper: gives the canvas a stable 3:2 CSS
+        // box (matching the 600x400 backing buffer) so the inline
+        // dimensions are 820x547 on a 1280-wide page. Without
+        // `aspect-ratio` + `max-width: calc(100vh * 3 / 2)`, the
+        // inner `c_game_fullscreen_canvas_wrapper` collapses to the
+        // canvas's natural inline-block height (a few pixels) on
+        // inline layout, producing a 820x210 (or similar) strip
+        // instead of the intended 3:2 frame.
+        aspect-ratio: "3 / 2";
+        max-width: "calc(100vh * 3 / 2)";
+        max-height: "calc(100vw * 2 / 3)";
     }
 
     pub c_game_fullscreen_canvas_wrapper {
+        // Fullscreen-mode wrapper: fills the fixed fullscreen
+        // container (1248x750 on a 1280x800 viewport) so the canvas
+        // packed inside takes the entire viewport minus toolbar
+        // padding. The canvas's `width:100%; height:100%` makes its
+        // CSS box match this wrapper exactly.
         flex: "1";
         display: "flex";
         align-items: "center";
         justify-content: "center";
         overflow: "hidden";
         min-height: "0";
-        // The canvas inside has aspect-ratio: 3/2 and is allowed to
-        // shrink to fit the column. This wrapper fills the column
-        // (1248x750 on a 1280x800 viewport) so the canvas's max-width
-        // and max-height are constrained by it, giving the largest
-        // 3:2 landscape canvas that fits without overflow.
         width: "100%";
         height: "100%";
     }
