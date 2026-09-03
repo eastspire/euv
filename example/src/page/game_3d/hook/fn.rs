@@ -210,9 +210,24 @@ pub(crate) fn is_face_visible(world_vertices: &[Vector3D], camera: &Camera3D) ->
 /// - `&SsaaCanvas` - The SSAA canvas wrapper.
 /// - `&[Cube3D]` - The cube list to render.
 /// - `&Camera3D` - The camera.
-pub(crate) fn render_scene(ssaa_canvas: &SsaaCanvas, cubes: &[Cube3D], camera: &Camera3D) {
+/// - `f64` - The canvas width in CSS pixels (clear-rect bound).
+/// - `f64` - The canvas height in CSS pixels (clear-rect bound).
+pub(crate) fn render_scene(
+    ssaa_canvas: &SsaaCanvas,
+    cubes: &[Cube3D],
+    camera: &Camera3D,
+    canvas_width: f64,
+    canvas_height: f64,
+) {
     let context: &CanvasRenderingContext2d = ssaa_canvas.get_offscreen_context();
-    context.clear_rect(0.0, 0.0, GAME_3D_CANVAS_WIDTH, GAME_3D_CANVAS_HEIGHT);
+    // Clear the entire backing buffer (not just the static 600x400
+    // default) so cubes in fullscreen mode don't leave ghost trails
+    // outside the cleared rect. Without this, `clear_rect` would
+    // erase the top-left 600x400 region and leave the rest of the
+    // larger fullscreen canvas with its previous frame's content
+    // visible — appearing as a "history trail" of past cube
+    // positions.
+    context.clear_rect(0.0, 0.0, canvas_width, canvas_height);
     let mut cube_batches: Vec<(f64, &Cube3D, Vec<Vector3D>)> = cubes
         .iter()
         .map(|cube: &Cube3D| {
@@ -731,7 +746,13 @@ pub(crate) fn start_game_3d_loop(
             );
             let render_cubes: Vec<Cube3D> =
                 interpolate_cubes(&cubes.borrow(), &prev_clone.borrow(), alpha);
-            render_scene(ssaa_canvas, &render_cubes, &camera);
+            render_scene(
+                ssaa_canvas,
+                &render_cubes,
+                &camera,
+                canvas_width,
+                canvas_height,
+            );
         }
         frame_clone.set(frame_clone.get() + 1);
         fps_clone.set(fps_clone.get() + frame_time);
