@@ -43,6 +43,13 @@ class! {
         justify-content: "center";
         overflow: "hidden";
         min-height: "0";
+        // The canvas inside has aspect-ratio: 3/2 and is allowed to
+        // shrink to fit the column. This wrapper fills the column
+        // (1248x750 on a 1280x800 viewport) so the canvas's max-width
+        // and max-height are constrained by it, giving the largest
+        // 3:2 landscape canvas that fits without overflow.
+        width: "100%";
+        height: "100%";
     }
 
     pub c_game_3d_canvas {
@@ -56,22 +63,21 @@ class! {
     }
 
     pub c_game_3d_canvas_fullscreen {
-        width: "100%";
+        // Landscape 3:2 aspect (same ratio as the inline canvas and the
+        // 600x400 backing buffer). `height: 100%; width: auto` plus
+        // `max-width: 100%` makes the canvas take the largest 3:2
+        // landscape box that fits inside its flex container, which is
+        // what maximises width utilisation in fullscreen mode.
         height: "100%";
+        width: "auto";
+        max-width: "100%";
+        max-height: "100%";
         cursor: "grab";
         display: "block";
         background: var!(accent);
         touch-action: "none";
         object-fit: "contain";
-        // Rotate the canvas (and its letterboxed bitmap inside) 90 degrees
-        // clockwise. The canvas's CSS box stays the same in layout - the
-        // rendered bitmap is visually rotated. The 3:2 backing buffer
-        // aspect ratio is preserved via `object-fit: contain` on the
-        // bitmap, so balls render as circles even after rotation. The
-        // wrapper's `overflow: hidden` clips the rotated corners so the
-        // visible area is the rotated canvas inscribed in the wrapper.
-        transform: "rotate(90deg)";
-        transform-origin: "center";
+        aspect-ratio: "3 / 2";
     }
 
     pub c_game_2d_canvas {
@@ -85,16 +91,18 @@ class! {
     }
 
     pub c_game_2d_canvas_fullscreen {
-        width: "100%";
+        // Landscape 3:2 aspect (same ratio as the inline canvas and the
+        // 600x400 backing buffer). See c_game_3d_canvas_fullscreen.
         height: "100%";
+        width: "auto";
+        max-width: "100%";
+        max-height: "100%";
         cursor: "pointer";
         display: "block";
         background: var!(accent);
         touch-action: "none";
         object-fit: "contain";
-        // See c_game_3d_canvas_fullscreen for the rotation rationale.
-        transform: "rotate(90deg)";
-        transform-origin: "center";
+        aspect-ratio: "3 / 2";
     }
 
     pub c_canvas_pixelated {
