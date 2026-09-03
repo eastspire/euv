@@ -188,7 +188,7 @@ fn game_2d_canvas_tab(fullscreen: UseGame2DFullscreen) -> VirtualNode {
                 class: if { canvas_2d_fullscreen.get() } {
                     c_game_container_fullscreen()
                 } else {
-                    c_game_canvas_wrapper(&format!("{GAME_2D_CANVAS_WIDTH} / {GAME_2D_CANVAS_HEIGHT}"))
+                    c_game_canvas_wrapper()
                 }
                 div {
                     class: c_game_fullscreen_canvas_wrapper()
@@ -337,7 +337,7 @@ fn game_2d_webgpu_tab(state: UseGame2DWebGpu, fullscreen: UseGame2DFullscreen) -
                 class: if { web_gpu_fullscreen.get() } {
                     c_game_container_fullscreen()
                 } else {
-                    c_game_canvas_wrapper(&format!("{GAME_2D_CANVAS_WIDTH} / {GAME_2D_CANVAS_HEIGHT}"))
+                    c_game_canvas_wrapper()
                 }
                 div {
                     class: c_game_fullscreen_canvas_wrapper()
@@ -522,7 +522,7 @@ fn game_2d_webgl_tab(state: UseGame2DWebGl, fullscreen: UseGame2DFullscreen) -> 
                 class: if { web_gl_fullscreen.get() } {
                     c_game_container_fullscreen()
                 } else {
-                    c_game_canvas_wrapper(&format!("{GAME_2D_CANVAS_WIDTH} / {GAME_2D_CANVAS_HEIGHT}"))
+                    c_game_canvas_wrapper()
                 }
                 div {
                     class: c_game_fullscreen_canvas_wrapper()
