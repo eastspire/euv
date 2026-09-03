@@ -63,30 +63,22 @@ class! {
     }
 
     pub c_game_3d_canvas_fullscreen {
-        // The canvas takes 100% of the fullscreen wrapper box so its
-        // CSS box matches the wrapper's landscape (e.g. 1248x750 on
-        // 1280x800 viewport). The 3:2 backing buffer is letterboxed
-        // inside via `object-fit: contain`, then the whole canvas is
-        // rotated 90 degrees clockwise below. The user requested:
-        // preserve the canvas's intrinsic 3:2 backing buffer ratio
-        // and rotate 90 degrees clockwise.
+        // Fullscreen canvas: CSS box matches the fullscreen wrapper
+        // (1248x750 on 1280x800 viewport, 100% of the column). The
+        // backing buffer is resized to match via the fullscreen enter
+        // hook (see game_2d hook::fn::enter_game_2d_fullscreen and
+        // game_3d hook::fn::enter_game_3d_fullscreen) so the ball /
+        // cube physics bounds, click mapping, and clear rect all
+        // operate on the full canvas dimensions instead of the
+        // 600x400 default. No CSS rotation, no aspect-ratio squeeze,
+        // no letterbox - the canvas fills the available space and the
+        // game elements are redrawn at the new size.
         width: "100%";
         height: "100%";
         cursor: "grab";
         display: "block";
         background: var!(accent);
         touch-action: "none";
-        object-fit: "contain";
-        // Rotate the canvas (and its letterboxed bitmap inside) 90
-        // degrees clockwise. The canvas's CSS box stays the same in
-        // layout - the rendered bitmap is visually rotated. The 3:2
-        // backing buffer aspect ratio is preserved via `object-fit:
-        // contain` on the bitmap, so balls render as circles even
-        // after rotation. The wrapper's `overflow: hidden` clips the
-        // rotated corners so the visible area is the rotated canvas
-        // inscribed in the wrapper.
-        transform: "rotate(90deg)";
-        transform-origin: "center";
     }
 
     pub c_game_2d_canvas {
@@ -100,16 +92,14 @@ class! {
     }
 
     pub c_game_2d_canvas_fullscreen {
-        // See c_game_3d_canvas_fullscreen for the rotation rationale.
+        // Fullscreen canvas - see c_game_3d_canvas_fullscreen for
+        // the resize-on-enter rationale.
         width: "100%";
         height: "100%";
         cursor: "pointer";
         display: "block";
         background: var!(accent);
         touch-action: "none";
-        object-fit: "contain";
-        transform: "rotate(90deg)";
-        transform-origin: "center";
     }
 
     pub c_canvas_pixelated {

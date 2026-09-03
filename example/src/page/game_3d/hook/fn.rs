@@ -1,5 +1,32 @@
 use super::*;
 
+/// Reads the current CSS pixel dimensions (clientWidth, clientHeight)
+/// of the canvas element matching the given selector.
+///
+/// Mirrors `crate::page::game_2d::hook::read_canvas_size`. Kept as a
+/// duplicate here so the game_2d and game_3d hook modules can be
+/// reviewed / maintained independently without one depending on the
+/// other. Used to size the SSAA backing buffer in both inline and
+/// fullscreen layouts.
+///
+/// # Arguments
+///
+/// - `&str` - The CSS selector for the canvas element.
+///
+/// # Returns
+///
+/// - `Option<(f64, f64)>` - The (width, height) in CSS pixels.
+pub(crate) fn read_canvas_size(canvas_selector: &str) -> Option<(f64, f64)> {
+    let window_value: Window = window()?;
+    let document_value: Document = window_value.document()?;
+    let element: Element = document_value
+        .query_selector(canvas_selector)
+        .ok()
+        .flatten()?;
+    let canvas: HtmlCanvasElement = element.unchecked_into();
+    Some((canvas.client_width() as f64, canvas.client_height() as f64))
+}
+
 /// Creates the 3D game reactive state signals wrapped in a `UseGame3D` struct.
 ///
 /// # Returns
@@ -59,27 +86,35 @@ pub(crate) fn create_initial_cubes() -> Vec<Cube3D> {
 
 /// Creates a `Camera3D` from the current yaw and pitch orbit angles.
 ///
+/// The camera's aspect ratio is set to `canvas_width / canvas_height`
+/// so the cube projection fills the entire canvas in both inline
+/// (~820x547, 1.5:1) and fullscreen (~1248x750, 1.66:1) layouts. Using
+/// runtime dimensions instead of the static 600x400 default keeps the
+/// cubes from appearing compressed / letterboxed in fullscreen.
+///
 /// # Arguments
 ///
 /// - `f64` - The orbit yaw angle in radians.
 /// - `f64` - The orbit pitch angle in radians.
+/// - `f64` - The canvas width in CSS pixels (camera X extent).
+/// - `f64` - The canvas height in CSS pixels (camera Y extent).
 ///
 /// # Returns
 ///
 /// - `Camera3D` - The configured camera.
-pub(crate) fn create_orbit_camera(yaw: f64, pitch: f64) -> Camera3D {
+pub(crate) fn create_orbit_camera(
+    yaw: f64,
+    pitch: f64,
+    canvas_width: f64,
+    canvas_height: f64,
+) -> Camera3D {
     let cos_pitch: f64 = pitch.cos();
     let position: Vector3D = Vector3D::new(
         GAME_3D_CAMERA_DISTANCE * yaw.sin() * cos_pitch,
         GAME_3D_CAMERA_DISTANCE * pitch.sin(),
         GAME_3D_CAMERA_DISTANCE * yaw.cos() * cos_pitch,
     );
-    Camera3D::create(
-        position,
-        Vector3D::zero(),
-        GAME_3D_CANVAS_WIDTH,
-        GAME_3D_CANVAS_HEIGHT,
-    )
+    Camera3D::create(position, Vector3D::zero(), canvas_width, canvas_height)
 }
 
 /// Transforms a cube's local vertex to world space.
@@ -383,6 +418,14 @@ pub(crate) fn interpolate_cubes(
 
 /// Queries the canvas element and creates an `SsaaCanvas` for high-quality rendering.
 ///
+/// Reads `canvas.clientWidth` and `canvas.clientHeight` from the live
+/// DOM so the SSAA backing buffer tracks the canvas's actual rendered
+/// size in both inline (~820x547) and fullscreen (~1248x750) layouts on
+/// a 1280x800 viewport. Cubes are then projected with the same runtime
+/// dimensions (see `Camera3D::create` and the WebGPU/WebGL resize
+/// blocks), so cube movement fills the full canvas in fullscreen mode
+/// instead of being bounded by the static 600x400 default.
+///
 /// # Returns
 ///
 /// - `Option<SsaaCanvas>` - The SSAA canvas, or `None` if unavailable.
@@ -394,10 +437,11 @@ pub(crate) fn acquire_game_3d_ssaa_canvas() -> Option<SsaaCanvas> {
         .and_then(|value: JsValue| value.as_f64())
         .is_some_and(|width: f64| width < 768.0);
     let scale_factor: f64 = if is_mobile { 1.0 } else { 2.0 };
+    let (canvas_width, canvas_height): (f64, f64) = read_canvas_size(GAME_3D_CANVAS_SELECTOR)?;
     SsaaCanvas::from_selector_with_scale(
         GAME_3D_CANVAS_SELECTOR,
-        GAME_3D_CANVAS_WIDTH,
-        GAME_3D_CANVAS_HEIGHT,
+        canvas_width,
+        canvas_height,
         scale_factor,
     )
 }
@@ -480,16 +524,19 @@ pub(crate) fn draw_game_3d_loading(target_selector: &str, color_source_selector:
         .and_then(|value: JsValue| value.as_f64())
         .is_some_and(|width: f64| width < 768.0);
     let scale_factor: f64 = if is_mobile { 1.0 } else { 2.0 };
+    let Some((canvas_width, canvas_height)) = read_canvas_size(target_selector) else {
+        return;
+    };
     let Some(ssaa_canvas) = SsaaCanvas::from_selector_with_scale(
         target_selector,
-        GAME_3D_CANVAS_WIDTH,
-        GAME_3D_CANVAS_HEIGHT,
+        canvas_width,
+        canvas_height,
         scale_factor,
     ) else {
         return;
     };
     let context: &CanvasRenderingContext2d = ssaa_canvas.get_offscreen_context();
-    context.clear_rect(0.0, 0.0, GAME_3D_CANVAS_WIDTH, GAME_3D_CANVAS_HEIGHT);
+    context.clear_rect(0.0, 0.0, canvas_width, canvas_height);
     let fill_style_key: JsValue = JsValue::from_str(GAME_3D_PROPERTY_FILL_STYLE);
     // Read the computed style of the source element once so the theme
     // variables (defined on a parent container, not on the document root)
@@ -518,9 +565,9 @@ pub(crate) fn draw_game_3d_loading(target_selector: &str, color_source_selector:
             &fill_style_key,
             &JsValue::from_str(&background_color),
         );
-        context.fill_rect(0.0, 0.0, GAME_3D_CANVAS_WIDTH, GAME_3D_CANVAS_HEIGHT);
+        context.fill_rect(0.0, 0.0, canvas_width, canvas_height);
     }
-    let font_size: f64 = GAME_3D_CANVAS_HEIGHT * GAME_3D_LOADING_FONT_SIZE_RATIO;
+    let font_size: f64 = canvas_height * GAME_3D_LOADING_FONT_SIZE_RATIO;
     let font: String = format!("{font_size}px {GAME_3D_LOADING_FONT_FAMILY}");
     // Read the loading text color from the CSS variable via getComputedStyle.
     let loading_color: String = computed_style
@@ -535,8 +582,8 @@ pub(crate) fn draw_game_3d_loading(target_selector: &str, color_source_selector:
     context.set_text_baseline("middle");
     let _ = context.fill_text(
         GAME_3D_LOADING_TEXT,
-        GAME_3D_CANVAS_WIDTH * 0.5,
-        GAME_3D_CANVAS_HEIGHT * 0.5,
+        canvas_width * 0.5,
+        canvas_height * 0.5,
     );
     ssaa_canvas.present();
 }
@@ -668,7 +715,20 @@ pub(crate) fn start_game_3d_loop(
             *context_clone.borrow_mut() = acquire_game_3d_ssaa_canvas();
         }
         if let Some(ssaa_canvas) = context_clone.borrow().as_ref() {
-            let camera: Camera3D = create_orbit_camera(angles.yaw.get(), angles.pitch.get());
+            // Read the live canvas dimensions every frame so the camera
+            // aspect ratio (and SSAA backing buffer) tracks the canvas's
+            // actual rendered size in both inline and fullscreen
+            // layouts. The acquire path above already swapped from
+            // `GAME_3D_CANVAS_WIDTH/HEIGHT` constants to these runtime
+            // dimensions, so this lookup completes the loop.
+            let (canvas_width, canvas_height): (f64, f64) =
+                read_canvas_size(GAME_3D_CANVAS_SELECTOR).unwrap_or((0.0, 0.0));
+            let camera: Camera3D = create_orbit_camera(
+                angles.yaw.get(),
+                angles.pitch.get(),
+                canvas_width,
+                canvas_height,
+            );
             let render_cubes: Vec<Cube3D> =
                 interpolate_cubes(&cubes.borrow(), &prev_clone.borrow(), alpha);
             render_scene(ssaa_canvas, &render_cubes, &camera);
@@ -1472,8 +1532,14 @@ pub(crate) fn start_game_3d_webgpu_loop(
             .and_then(|value: JsValue| value.as_f64())
             .filter(|value: &f64| value.is_finite() && *value >= 1.0)
             .unwrap_or(1.0);
-            let new_physical_width: u32 = (GAME_3D_CANVAS_WIDTH * dpr).round() as u32;
-            let new_physical_height: u32 = (GAME_3D_CANVAS_HEIGHT * dpr).round() as u32;
+            // Read the canvas's CSS pixel dimensions (clientWidth / clientHeight)
+            // so the GPU backing store grows with the canvas when the user
+            // enters or exits fullscreen. Mirrors the same swap in
+            // game_2d/hook/fn.rs.
+            let (canvas_width, canvas_height): (f64, f64) =
+                read_canvas_size(GAME_3D_WEBGPU_CANVAS_SELECTOR).unwrap_or((0.0, 0.0));
+            let new_physical_width: u32 = (canvas_width * dpr).round() as u32;
+            let new_physical_height: u32 = (canvas_height * dpr).round() as u32;
             // Borrow the renderer exactly once for the entire frame. We
             // use `borrow_mut().as_mut()` (NOT `borrow_mut().take()`) so
             // we do not have to write back - the RefMut guard releases
@@ -1495,7 +1561,12 @@ pub(crate) fn start_game_3d_webgpu_loop(
                 if resize_dirty {
                     let _ = renderer.resize(new_physical_width, new_physical_height);
                 }
-                let camera: Camera3D = create_orbit_camera(angles.yaw.get(), angles.pitch.get());
+                let camera: Camera3D = create_orbit_camera(
+                    angles.yaw.get(),
+                    angles.pitch.get(),
+                    canvas_width,
+                    canvas_height,
+                );
                 let render_cubes: Vec<Cube3D> =
                     interpolate_cubes(&cubes.borrow(), &prev_for_loop.borrow(), alpha);
                 let uniform_data: Vec<f32> = pack_game_3d_cubes_uniform(&render_cubes, &camera);
@@ -1776,13 +1847,24 @@ pub(crate) fn start_game_3d_webgl_loop(
             .and_then(|value: JsValue| value.as_f64())
             .filter(|value: &f64| value.is_finite() && *value >= 1.0)
             .unwrap_or(1.0);
-            let new_physical_width: u32 = (GAME_3D_CANVAS_WIDTH * dpr).round() as u32;
-            let new_physical_height: u32 = (GAME_3D_CANVAS_HEIGHT * dpr).round() as u32;
+            // Read the canvas's CSS pixel dimensions (clientWidth / clientHeight)
+            // so the GPU backing store grows with the canvas when the user
+            // enters or exits fullscreen. Mirrors the same swap in
+            // game_2d/hook/fn.rs and in the WebGPU loop above.
+            let (canvas_width, canvas_height): (f64, f64) =
+                read_canvas_size(GAME_3D_WEBGL_CANVAS_SELECTOR).unwrap_or((0.0, 0.0));
+            let new_physical_width: u32 = (canvas_width * dpr).round() as u32;
+            let new_physical_height: u32 = (canvas_height * dpr).round() as u32;
             if let Some(renderer) = renderer_for_loop.borrow_mut().as_mut() {
                 if resize_dirty {
                     renderer.resize(new_physical_width, new_physical_height);
                 }
-                let camera: Camera3D = create_orbit_camera(angles.yaw.get(), angles.pitch.get());
+                let camera: Camera3D = create_orbit_camera(
+                    angles.yaw.get(),
+                    angles.pitch.get(),
+                    canvas_width,
+                    canvas_height,
+                );
                 let render_cubes: Vec<Cube3D> =
                     interpolate_cubes(&cubes.borrow(), &prev_for_loop.borrow(), alpha);
                 let uniform_data: Vec<f32> = pack_game_3d_cubes_uniform(&render_cubes, &camera);
@@ -1878,6 +1960,22 @@ pub(crate) fn enter_game_3d_fullscreen(state: UseGame3DFullscreen, tab: Signal<b
     let _ = state;
     Router::overlay_push_state();
     UseEuvLayout::apply_cached_insets();
+    // Dispatch a `resize` event on the window so the existing
+    // `App::use_window_event("resize", ...)` handler fires and the
+    // 3D game loop's `resize_dirty` flag is set. That causes the
+    // loop to re-acquire the SSAA canvas with the new (fullscreen)
+    // dimensions read from `canvas.clientWidth` / `clientHeight`,
+    // and re-call `WebGpuRenderer::resize` / `WebGlRenderer::resize`
+    // for the GPU canvases so the cube projection fills the new
+    // canvas size. Mirrors the same hook in
+    // `example/src/page/game_2d/hook/fn.rs::enter_game_2d_fullscreen`.
+    let Some(window_value): Option<Window> = window() else {
+        return;
+    };
+    let event: Result<Event, JsValue> = Event::new("resize");
+    if let Ok(event) = event {
+        let _ = window_value.dispatch_event(&event);
+    }
 }
 
 /// Exits landscape fullscreen mode for the 3D game on the active tab.
@@ -1892,6 +1990,16 @@ pub(crate) fn enter_game_3d_fullscreen(state: UseGame3DFullscreen, tab: Signal<b
 pub(crate) fn exit_game_3d_fullscreen(tab: Signal<bool>) {
     tab.set(false);
     UseEuvLayout::apply_cached_insets();
+    // See `enter_game_3d_fullscreen` - dispatch a synthetic `resize`
+    // event so the game loop re-acquires the canvas with the inline
+    // dimensions.
+    let Some(window_value): Option<Window> = window() else {
+        return;
+    };
+    let event: Result<Event, JsValue> = Event::new("resize");
+    if let Ok(event) = event {
+        let _ = window_value.dispatch_event(&event);
+    }
 }
 
 /// Exits landscape fullscreen mode without consuming a browser history
@@ -1906,6 +2014,15 @@ pub(crate) fn exit_game_3d_fullscreen(tab: Signal<bool>) {
 pub(crate) fn exit_game_3d_fullscreen_from_popstate(tab: Signal<bool>) {
     tab.set(false);
     UseEuvLayout::apply_cached_insets();
+    // See `enter_game_3d_fullscreen` for why we dispatch a synthetic
+    // `resize` event here.
+    let Some(window_value): Option<Window> = window() else {
+        return;
+    };
+    let event: Result<Event, JsValue> = Event::new("resize");
+    if let Ok(event) = event {
+        let _ = window_value.dispatch_event(&event);
+    }
 }
 
 /// Subscribes to browser `popstate` events to handle the system back
