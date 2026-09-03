@@ -55,6 +55,25 @@ class! {
         object-fit: "contain";
     }
 
+    pub c_game_3d_canvas_fullscreen {
+        width: "100%";
+        height: "100%";
+        cursor: "grab";
+        display: "block";
+        background: var!(accent);
+        touch-action: "none";
+        object-fit: "contain";
+        // Rotate the canvas (and its letterboxed bitmap inside) 45 degrees
+        // clockwise. The canvas's CSS box stays the same in layout - the
+        // rendered bitmap is visually rotated. The 3:2 backing buffer
+        // aspect ratio is preserved via `object-fit: contain` on the
+        // bitmap, so balls render as circles even after rotation. The
+        // wrapper's `overflow: hidden` clips the rotated corners so the
+        // visible area is the rotated canvas inscribed in the wrapper.
+        transform: "rotate(45deg)";
+        transform-origin: "center";
+    }
+
     pub c_game_2d_canvas {
         width: "100%";
         height: "100%";
@@ -63,6 +82,19 @@ class! {
         background: var!(accent);
         touch-action: "none";
         object-fit: "contain";
+    }
+
+    pub c_game_2d_canvas_fullscreen {
+        width: "100%";
+        height: "100%";
+        cursor: "pointer";
+        display: "block";
+        background: var!(accent);
+        touch-action: "none";
+        object-fit: "contain";
+        // See c_game_3d_canvas_fullscreen for the rotation rationale.
+        transform: "rotate(45deg)";
+        transform-origin: "center";
     }
 
     pub c_canvas_pixelated {

@@ -196,7 +196,11 @@ fn game_2d_canvas_tab(fullscreen: UseGame2DFullscreen) -> VirtualNode {
                         class: c_game_fullscreen_canvas_letterbox()
                         canvas {
                             id: GAME_2D_CANVAS_ID
-                            class: c_game_2d_canvas()
+                            class: if { canvas_2d_fullscreen.get() } {
+                                c_game_2d_canvas_fullscreen()
+                            } else {
+                                c_game_2d_canvas()
+                            }
                             onclick: on_canvas_click
                             ontouchstart: on_canvas_touch
                         }
@@ -345,7 +349,11 @@ fn game_2d_webgpu_tab(state: UseGame2DWebGpu, fullscreen: UseGame2DFullscreen) -
                         class: c_game_fullscreen_canvas_letterbox()
                         canvas {
                             id: GAME_2D_WEBGPU_CANVAS_ID
-                            class: c_game_2d_canvas()
+                            class: if { web_gpu_fullscreen.get() } {
+                                c_game_2d_canvas_fullscreen()
+                            } else {
+                                c_game_2d_canvas()
+                            }
                             onclick: on_canvas_click
                             ontouchstart: on_canvas_touch
                         }
@@ -530,7 +538,11 @@ fn game_2d_webgl_tab(state: UseGame2DWebGl, fullscreen: UseGame2DFullscreen) -> 
                         class: c_game_fullscreen_canvas_letterbox()
                         canvas {
                             id: GAME_2D_WEBGL_CANVAS_ID
-                            class: c_game_2d_canvas()
+                            class: if { web_gl_fullscreen.get() } {
+                            c_game_2d_canvas_fullscreen()
+                        } else {
+                            c_game_2d_canvas()
+                        }
                             onclick: on_canvas_click
                             ontouchstart: on_canvas_touch
                         }
