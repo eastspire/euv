@@ -81,7 +81,10 @@ pub(crate) fn game_2d_on_spawn_ball(
             return;
         };
         let rect: DomRect = canvas_element.get_bounding_client_rect();
-        let position: Vector2D = map_client_to_canvas(client_x, client_y, &rect);
+        let canvas_width: f64 = canvas_element.client_width() as f64;
+        let canvas_height: f64 = canvas_element.client_height() as f64;
+        let position: Vector2D =
+            map_client_to_canvas(client_x, client_y, &rect, canvas_width, canvas_height);
         let ball: Ball = create_ball(position);
         balls.borrow_mut().push(ball);
         let new_count: usize = balls.borrow().len();
@@ -246,7 +249,10 @@ pub(crate) fn game_2d_on_touch_spawn_ball(
             return;
         };
         let rect: DomRect = canvas_element.get_bounding_client_rect();
-        let position: Vector2D = map_client_to_canvas(client_x, client_y, &rect);
+        let canvas_width: f64 = canvas_element.client_width() as f64;
+        let canvas_height: f64 = canvas_element.client_height() as f64;
+        let position: Vector2D =
+            map_client_to_canvas(client_x, client_y, &rect, canvas_width, canvas_height);
         let ball: Ball = create_ball(position);
         balls.borrow_mut().push(ball);
         let new_count: usize = balls.borrow().len();
@@ -258,11 +264,19 @@ pub(crate) fn game_2d_on_touch_spawn_ball(
 
 /// Maps viewport client coordinates to canvas-internal coordinates.
 ///
+/// The canvas-internal coordinate space now matches the canvas's actual
+/// CSS pixel dimensions (read from `canvas.clientWidth` / `clientHeight`
+/// at acquire time) instead of the static 600x400 default, so balls in
+/// fullscreen mode are positioned in the full canvas rectangle, not
+/// inside a 600x400 logical rectangle.
+///
 /// # Arguments
 ///
 /// - `f64` - The client x coordinate.
 /// - `f64` - The client y coordinate.
 /// - `&DomRect` - The cached canvas bounding rect.
+/// - `f64` - The canvas-internal width in CSS pixels.
+/// - `f64` - The canvas-internal height in CSS pixels.
 ///
 /// # Returns
 ///
@@ -271,14 +285,16 @@ pub(crate) fn map_client_to_canvas(
     client_x: f64,
     client_y: f64,
     canvas_rect: &DomRect,
+    canvas_width: f64,
+    canvas_height: f64,
 ) -> Vector2D {
     let rect_width: f64 = canvas_rect.width();
     let rect_height: f64 = canvas_rect.height();
     if rect_width < EPSILON || rect_height < EPSILON {
         return Vector2D::zero();
     }
-    let scale_x: f64 = GAME_2D_CANVAS_WIDTH / rect_width;
-    let scale_y: f64 = GAME_2D_CANVAS_HEIGHT / rect_height;
+    let scale_x: f64 = canvas_width / rect_width;
+    let scale_y: f64 = canvas_height / rect_height;
     Vector2D::new(
         (client_x - canvas_rect.left()) * scale_x,
         (client_y - canvas_rect.top()) * scale_y,
@@ -298,7 +314,12 @@ pub(crate) fn map_client_to_canvas(
 ///
 /// - `&mut [Ball]` - The mutable ball slice.
 /// - `f64` - The delta time in seconds.
-pub(crate) fn update_balls(balls: &mut [Ball], delta_time: f64) {
+pub(crate) fn update_balls(
+    balls: &mut [Ball],
+    delta_time: f64,
+    canvas_width: f64,
+    canvas_height: f64,
+) {
     let sub_dt: f64 = delta_time / GAME_2D_PHYSICS_SUBSTEPS as f64;
     let gravity: Vector2D = Vector2D::new(0.0, GAME_2D_GRAVITY);
     for _ in 0..GAME_2D_PHYSICS_SUBSTEPS {
@@ -309,7 +330,7 @@ pub(crate) fn update_balls(balls: &mut [Ball], delta_time: f64) {
             ball.position += ball.velocity.scaled(sub_dt);
         }
         for ball in balls.iter_mut() {
-            resolve_wall_collision(ball);
+            resolve_wall_collision(ball, canvas_width, canvas_height);
         }
         for _ in 0..GAME_2D_COLLISION_ITERATIONS {
             let count: usize = balls.len();
@@ -326,18 +347,24 @@ pub(crate) fn update_balls(balls: &mut [Ball], delta_time: f64) {
 /// Resolves a collision between a ball and the canvas walls.
 ///
 /// Reflects velocity with restitution and clamps position inside bounds.
+/// Bounds are passed in as `canvas_width` / `canvas_height` so the wall
+/// rectangle tracks the canvas's actual CSS pixel dimensions in both
+/// inline (~820x547) and fullscreen (~1248x750) layouts, instead of the
+/// static 600x400 default.
 ///
 /// # Arguments
 ///
 /// - `&mut Ball` - The ball to check and correct.
-pub(crate) fn resolve_wall_collision(ball: &mut Ball) {
+/// - `f64` - The canvas width in CSS pixels (wall X bound).
+/// - `f64` - The canvas height in CSS pixels (wall Y bound).
+pub(crate) fn resolve_wall_collision(ball: &mut Ball, canvas_width: f64, canvas_height: f64) {
     if ball.position.get_x() - ball.radius < 0.0 {
         ball.position.set_x(ball.radius);
         let velocity_x: f64 = ball.velocity.get_x();
         ball.velocity.set_x(velocity_x.abs() * GAME_2D_RESTITUTION);
     }
-    if ball.position.get_x() + ball.radius > GAME_2D_CANVAS_WIDTH {
-        ball.position.set_x(GAME_2D_CANVAS_WIDTH - ball.radius);
+    if ball.position.get_x() + ball.radius > canvas_width {
+        ball.position.set_x(canvas_width - ball.radius);
         let velocity_x: f64 = ball.velocity.get_x();
         ball.velocity.set_x(-velocity_x.abs() * GAME_2D_RESTITUTION);
     }
@@ -346,8 +373,8 @@ pub(crate) fn resolve_wall_collision(ball: &mut Ball) {
         let velocity_y: f64 = ball.velocity.get_y();
         ball.velocity.set_y(velocity_y.abs() * GAME_2D_RESTITUTION);
     }
-    if ball.position.get_y() + ball.radius > GAME_2D_CANVAS_HEIGHT {
-        ball.position.set_y(GAME_2D_CANVAS_HEIGHT - ball.radius);
+    if ball.position.get_y() + ball.radius > canvas_height {
+        ball.position.set_y(canvas_height - ball.radius);
         let velocity_y: f64 = ball.velocity.get_y();
         ball.velocity.set_y(-velocity_y.abs() * GAME_2D_RESTITUTION);
     }
@@ -453,18 +480,26 @@ pub(crate) fn interpolate_balls(
 
 /// Renders all balls onto the supplied SSAA canvas and presents the result.
 ///
-/// Draws onto the offscreen context using logical CSS-pixel coordinates,
-/// then delegates to `present()` for HiDPI-friendly downscaling. The canvas
-/// backing store is sized to `devicePixelRatio * scale_factor` automatically
-/// by `SsaaCanvas::from_selector_with_scale`.
+/// The clear rect uses the canvas's actual CSS pixel dimensions so the
+/// entire backing buffer is wiped before each redraw, in both inline and
+/// fullscreen layouts. Draws onto the offscreen context using logical
+/// CSS-pixel coordinates, then delegates to `present()` for HiDPI-
+/// friendly downscaling.
 ///
 /// # Arguments
 ///
 /// - `&SsaaCanvas` - The SSAA canvas wrapper.
 /// - `&[Ball]` - The ball list to render.
-pub(crate) fn render_balls_with_ssaa(ssaa_canvas: &SsaaCanvas, balls: &[Ball]) {
+/// - `f64` - The canvas width in CSS pixels (clear-rect bound).
+/// - `f64` - The canvas height in CSS pixels (clear-rect bound).
+pub(crate) fn render_balls_with_ssaa(
+    ssaa_canvas: &SsaaCanvas,
+    balls: &[Ball],
+    canvas_width: f64,
+    canvas_height: f64,
+) {
     let context: &CanvasRenderingContext2d = ssaa_canvas.get_offscreen_context();
-    context.clear_rect(0.0, 0.0, GAME_2D_CANVAS_WIDTH, GAME_2D_CANVAS_HEIGHT);
+    context.clear_rect(0.0, 0.0, canvas_width, canvas_height);
     let fill_style_key: JsValue = JsValue::from_str(GAME_2D_PROPERTY_FILL_STYLE);
     for ball in balls {
         let _ = Reflect::set(context, &fill_style_key, &JsValue::from_str(&ball.color));
@@ -492,6 +527,48 @@ pub(crate) fn render_balls_with_ssaa(ssaa_canvas: &SsaaCanvas, balls: &[Ball]) {
 ///
 /// # Returns
 ///
+/// Reads the current CSS pixel dimensions (clientWidth, clientHeight)
+/// of the canvas element matching the given selector.
+///
+/// Used in fullscreen-aware canvas setups so the SSAA backing buffer
+/// resizes to match the canvas's actual rendered size when the
+/// canvas switches between inline (smaller) and fullscreen (larger)
+/// layouts. Returns `None` if the canvas element is missing or the
+/// window/document is unavailable.
+///
+/// # Arguments
+///
+/// - `&str` - The CSS selector for the canvas element.
+///
+/// # Returns
+///
+/// - `Option<(f64, f64)>` - The (width, height) in CSS pixels.
+pub(crate) fn read_canvas_size(canvas_selector: &str) -> Option<(f64, f64)> {
+    let window_value: Window = window()?;
+    let document_value: Document = window_value.document()?;
+    let element: Element = document_value
+        .query_selector(canvas_selector)
+        .ok()
+        .flatten()?;
+    let canvas: HtmlCanvasElement = element.unchecked_into();
+    Some((canvas.client_width() as f64, canvas.client_height() as f64))
+}
+
+/// Acquires the 2D game canvas and its SSAA wrapper, sized to the
+/// canvas's current CSS pixel dimensions.
+///
+/// Reads `canvas.clientWidth` and `canvas.clientHeight` from the
+/// live DOM so the SSAA backing buffer tracks the canvas's actual
+/// rendered size in both inline (~820x547) and fullscreen
+/// (~1248x750) layouts on a 1280x800 viewport. The game physics
+/// bounds (resolve_wall_collision), click mapping
+/// (map_client_to_canvas), and clear_rect calls all read the same
+/// runtime dimensions via `read_canvas_size` so balls render and
+/// bounce against the actual canvas edges instead of the static
+/// 600x400 default.
+///
+/// # Returns
+///
 /// - `Option<(HtmlCanvasElement, SsaaCanvas)>` - The display canvas plus
 ///   the SSAA wrapper, or `None` if the canvas element was not found.
 pub(crate) fn acquire_game_2d_ssaa_canvas() -> Option<(HtmlCanvasElement, SsaaCanvas)> {
@@ -502,10 +579,11 @@ pub(crate) fn acquire_game_2d_ssaa_canvas() -> Option<(HtmlCanvasElement, SsaaCa
         .and_then(|value: JsValue| value.as_f64())
         .is_some_and(|width: f64| width < 768.0);
     let scale_factor: f64 = if is_mobile { 1.0 } else { 2.0 };
+    let (canvas_width, canvas_height): (f64, f64) = read_canvas_size(GAME_2D_CANVAS_SELECTOR)?;
     let ssaa_canvas: SsaaCanvas = SsaaCanvas::from_selector_with_scale(
         GAME_2D_CANVAS_SELECTOR,
-        GAME_2D_CANVAS_WIDTH,
-        GAME_2D_CANVAS_HEIGHT,
+        canvas_width,
+        canvas_height,
         scale_factor,
     )?;
     let document_value: Document = window_value.document()?;
@@ -543,16 +621,19 @@ pub(crate) fn draw_game_2d_loading(target_selector: &str, color_source_selector:
         .and_then(|value: JsValue| value.as_f64())
         .is_some_and(|width: f64| width < 768.0);
     let scale_factor: f64 = if is_mobile { 1.0 } else { 2.0 };
+    let Some((canvas_width, canvas_height)) = read_canvas_size(target_selector) else {
+        return;
+    };
     let Some(ssaa_canvas) = SsaaCanvas::from_selector_with_scale(
         target_selector,
-        GAME_2D_CANVAS_WIDTH,
-        GAME_2D_CANVAS_HEIGHT,
+        canvas_width,
+        canvas_height,
         scale_factor,
     ) else {
         return;
     };
     let context: &CanvasRenderingContext2d = ssaa_canvas.get_offscreen_context();
-    context.clear_rect(0.0, 0.0, GAME_2D_CANVAS_WIDTH, GAME_2D_CANVAS_HEIGHT);
+    context.clear_rect(0.0, 0.0, canvas_width, canvas_height);
     let fill_style_key: JsValue = JsValue::from_str(GAME_2D_PROPERTY_FILL_STYLE);
     // Read the computed style of the source element once so the theme
     // variables (defined on a parent container, not on the document root)
@@ -581,9 +662,9 @@ pub(crate) fn draw_game_2d_loading(target_selector: &str, color_source_selector:
             &fill_style_key,
             &JsValue::from_str(&background_color),
         );
-        context.fill_rect(0.0, 0.0, GAME_2D_CANVAS_WIDTH, GAME_2D_CANVAS_HEIGHT);
+        context.fill_rect(0.0, 0.0, canvas_width, canvas_height);
     }
-    let font_size: f64 = GAME_2D_CANVAS_HEIGHT * GAME_2D_LOADING_FONT_SIZE_RATIO;
+    let font_size: f64 = canvas_height * GAME_2D_LOADING_FONT_SIZE_RATIO;
     let font: String = format!("{font_size}px {GAME_2D_LOADING_FONT_FAMILY}");
     // Read the loading text color from the CSS variable via getComputedStyle.
     let loading_color: String = computed_style
@@ -598,8 +679,8 @@ pub(crate) fn draw_game_2d_loading(target_selector: &str, color_source_selector:
     context.set_text_baseline("middle");
     let _ = context.fill_text(
         GAME_2D_LOADING_TEXT,
-        GAME_2D_CANVAS_WIDTH * 0.5,
-        GAME_2D_CANVAS_HEIGHT * 0.5,
+        canvas_width * 0.5,
+        canvas_height * 0.5,
     );
     ssaa_canvas.present();
 }
@@ -692,7 +773,13 @@ pub(crate) fn start_game_2d_loop(
             acc_clone.set(acc_clone.get() + frame_time);
             while acc_clone.get() >= GAME_2D_FIXED_TIMESTEP {
                 snapshot_ball_positions(&mut prev_clone.borrow_mut(), &balls.borrow());
-                update_balls(&mut balls.borrow_mut(), GAME_2D_FIXED_TIMESTEP);
+                let (cw, ch): (f64, f64) = canvas_cache
+                    .0
+                    .borrow()
+                    .as_ref()
+                    .map(|canvas| (canvas.client_width() as f64, canvas.client_height() as f64))
+                    .unwrap_or((0.0, 0.0));
+                update_balls(&mut balls.borrow_mut(), GAME_2D_FIXED_TIMESTEP, cw, ch);
                 acc_clone.set(acc_clone.get() - GAME_2D_FIXED_TIMESTEP);
             }
         }
@@ -709,9 +796,15 @@ pub(crate) fn start_game_2d_loop(
             *context_clone.borrow_mut() = Some(ssaa_canvas);
         }
         if let Some(ssaa_canvas) = context_clone.borrow().as_ref() {
+            let (canvas_width, canvas_height): (f64, f64) = canvas_cache
+                .0
+                .borrow()
+                .as_ref()
+                .map(|canvas| (canvas.client_width() as f64, canvas.client_height() as f64))
+                .unwrap_or((0.0, 0.0));
             let render_balls: Vec<Ball> =
                 interpolate_balls(&balls.borrow(), &prev_clone.borrow(), alpha);
-            render_balls_with_ssaa(ssaa_canvas, &render_balls);
+            render_balls_with_ssaa(ssaa_canvas, &render_balls, canvas_width, canvas_height);
         }
         frame_clone.set(frame_clone.get() + 1);
         fps_clone.set(fps_clone.get() + frame_time);
@@ -1001,17 +1094,14 @@ fn game_2d_ball_gpu_record(ball: &Ball) -> ([f32; 4], [f32; 4]) {
 /// # Arguments
 ///
 /// - `&[Ball]` - The ball list for this frame.
+/// - `f64` - The canvas width in CSS pixels (u-vec2 canvas_size.x).
+/// - `f64` - The canvas height in CSS pixels (u-vec2 canvas_size.y).
 ///
 /// # Returns
 ///
 /// - `Vec<f32>` - The packed uniform data (4 + `GAME_2D_MAX_BALLS * 8` floats).
-fn pack_game_2d_balls_webgpu(balls: &[Ball]) -> Vec<f32> {
-    let mut data: Vec<f32> = vec![
-        GAME_2D_CANVAS_WIDTH as f32,
-        GAME_2D_CANVAS_HEIGHT as f32,
-        0.0,
-        0.0,
-    ];
+fn pack_game_2d_balls_webgpu(balls: &[Ball], canvas_width: f64, canvas_height: f64) -> Vec<f32> {
+    let mut data: Vec<f32> = vec![canvas_width as f32, canvas_height as f32, 0.0, 0.0];
     for ball in balls {
         let (pos_radius, color) = game_2d_ball_gpu_record(ball);
         data.extend_from_slice(&pos_radius);
@@ -1265,7 +1355,13 @@ pub(crate) fn start_game_2d_webgpu_loop(
                 acc_clone.set(acc_clone.get() + frame_time);
                 while acc_clone.get() >= GAME_2D_FIXED_TIMESTEP {
                     snapshot_ball_positions(&mut prev_for_loop.borrow_mut(), &balls.borrow());
-                    update_balls(&mut balls.borrow_mut(), GAME_2D_FIXED_TIMESTEP);
+                    let (cw, ch): (f64, f64) = canvas_cache
+                        .0
+                        .borrow()
+                        .as_ref()
+                        .map(|canvas| (canvas.client_width() as f64, canvas.client_height() as f64))
+                        .unwrap_or((0.0, 0.0));
+                    update_balls(&mut balls.borrow_mut(), GAME_2D_FIXED_TIMESTEP, cw, ch);
                     acc_clone.set(acc_clone.get() - GAME_2D_FIXED_TIMESTEP);
                 }
             }
@@ -1293,8 +1389,21 @@ pub(crate) fn start_game_2d_webgpu_loop(
             .and_then(|value: JsValue| value.as_f64())
             .filter(|value: &f64| value.is_finite() && *value >= 1.0)
             .unwrap_or(1.0);
-            let new_physical_width: u32 = (GAME_2D_CANVAS_WIDTH * dpr).round() as u32;
-            let new_physical_height: u32 = (GAME_2D_CANVAS_HEIGHT * dpr).round() as u32;
+            // Read the canvas's CSS pixel dimensions (clientWidth /
+            // clientHeight) on the resize tick so the GPU backing store
+            // grows with the canvas when the user enters or exits
+            // fullscreen. The WebGPU / WebGL canvases have their own
+            // resize path here (see `renderer.resize` below) that is
+            // driven by the same `resize_dirty` debounce, so we just
+            // swap the constant dimensions for runtime ones.
+            let (canvas_width, canvas_height): (f64, f64) = canvas_cache
+                .0
+                .borrow()
+                .as_ref()
+                .map(|canvas| (canvas.client_width() as f64, canvas.client_height() as f64))
+                .unwrap_or((0.0, 0.0));
+            let new_physical_width: u32 = (canvas_width * dpr).round() as u32;
+            let new_physical_height: u32 = (canvas_height * dpr).round() as u32;
             // Borrow the renderer exactly once for the entire frame. We
             // use `borrow_mut().as_mut()` (NOT `borrow_mut().take()`) so
             // we do not have to write back - the RefMut guard releases
@@ -1318,7 +1427,8 @@ pub(crate) fn start_game_2d_webgpu_loop(
                 }
                 let render_balls: Vec<Ball> =
                     interpolate_balls(&balls.borrow(), &prev_for_loop.borrow(), alpha);
-                let uniform_data: Vec<f32> = pack_game_2d_balls_webgpu(&render_balls);
+                let uniform_data: Vec<f32> =
+                    pack_game_2d_balls_webgpu(&render_balls, canvas_width, canvas_height);
                 let vertex_count: u32 = (render_balls.len() * 6) as u32;
                 renderer.update_uniform_buffer(&buffer_for_loop, &uniform_data);
                 // Refresh the clear color every frame so a theme toggle
@@ -1414,6 +1524,20 @@ pub(crate) fn enter_game_2d_fullscreen(state: UseGame2DFullscreen, tab: Signal<b
     let _ = state;
     Router::overlay_push_state();
     UseEuvLayout::apply_cached_insets();
+    // Dispatch a `resize` event on the window so the existing
+    // `App::use_window_event("resize", ...)` handler fires and the
+    // game loop's `resize_dirty` flag is set. That causes the loop
+    // to re-acquire the SSAA canvas with the new (fullscreen)
+    // dimensions read from `canvas.clientWidth` / `clientHeight`,
+    // so the backing buffer resizes from the inline size to the
+    // fullscreen size and ball / cube physics bounds follow.
+    let Some(window_value): Option<Window> = window() else {
+        return;
+    };
+    let event: Result<Event, JsValue> = Event::new("resize");
+    if let Ok(event) = event {
+        let _ = window_value.dispatch_event(&event);
+    }
 }
 
 /// Exits landscape fullscreen mode for the 2D game on the active tab.
@@ -1428,6 +1552,17 @@ pub(crate) fn enter_game_2d_fullscreen(state: UseGame2DFullscreen, tab: Signal<b
 pub(crate) fn exit_game_2d_fullscreen(tab: Signal<bool>) {
     tab.set(false);
     UseEuvLayout::apply_cached_insets();
+    // See `enter_game_2d_fullscreen` - dispatch a synthetic `resize`
+    // event so the game loop's resize-debounce handler picks up the
+    // canvas's now-smaller CSS box and re-acquires the SSAA canvas
+    // with the inline dimensions.
+    let Some(window_value): Option<Window> = window() else {
+        return;
+    };
+    let event: Result<Event, JsValue> = Event::new("resize");
+    if let Ok(event) = event {
+        let _ = window_value.dispatch_event(&event);
+    }
 }
 
 /// Exits landscape fullscreen mode without consuming a browser history
@@ -1442,6 +1577,15 @@ pub(crate) fn exit_game_2d_fullscreen(tab: Signal<bool>) {
 pub(crate) fn exit_game_2d_fullscreen_from_popstate(tab: Signal<bool>) {
     tab.set(false);
     UseEuvLayout::apply_cached_insets();
+    // See `enter_game_2d_fullscreen` for why we dispatch a synthetic
+    // `resize` event here.
+    let Some(window_value): Option<Window> = window() else {
+        return;
+    };
+    let event: Result<Event, JsValue> = Event::new("resize");
+    if let Ok(event) = event {
+        let _ = window_value.dispatch_event(&event);
+    }
 }
 
 /// Subscribes to browser `popstate` events to handle the system back
@@ -1662,7 +1806,13 @@ pub(crate) fn start_game_2d_webgl_loop(
                 acc_clone.set(acc_clone.get() + frame_time);
                 while acc_clone.get() >= GAME_2D_FIXED_TIMESTEP {
                     snapshot_ball_positions(&mut prev_for_loop.borrow_mut(), &balls.borrow());
-                    update_balls(&mut balls.borrow_mut(), GAME_2D_FIXED_TIMESTEP);
+                    let (cw, ch): (f64, f64) = canvas_cache
+                        .0
+                        .borrow()
+                        .as_ref()
+                        .map(|canvas| (canvas.client_width() as f64, canvas.client_height() as f64))
+                        .unwrap_or((0.0, 0.0));
+                    update_balls(&mut balls.borrow_mut(), GAME_2D_FIXED_TIMESTEP, cw, ch);
                     acc_clone.set(acc_clone.get() - GAME_2D_FIXED_TIMESTEP);
                 }
             }
@@ -1684,8 +1834,21 @@ pub(crate) fn start_game_2d_webgl_loop(
             .and_then(|value: JsValue| value.as_f64())
             .filter(|value: &f64| value.is_finite() && *value >= 1.0)
             .unwrap_or(1.0);
-            let new_physical_width: u32 = (GAME_2D_CANVAS_WIDTH * dpr).round() as u32;
-            let new_physical_height: u32 = (GAME_2D_CANVAS_HEIGHT * dpr).round() as u32;
+            // Read the canvas's CSS pixel dimensions (clientWidth /
+            // clientHeight) on the resize tick so the GPU backing store
+            // grows with the canvas when the user enters or exits
+            // fullscreen. The WebGPU / WebGL canvases have their own
+            // resize path here (see `renderer.resize` below) that is
+            // driven by the same `resize_dirty` debounce, so we just
+            // swap the constant dimensions for runtime ones.
+            let (canvas_width, canvas_height): (f64, f64) = canvas_cache
+                .0
+                .borrow()
+                .as_ref()
+                .map(|canvas| (canvas.client_width() as f64, canvas.client_height() as f64))
+                .unwrap_or((0.0, 0.0));
+            let new_physical_width: u32 = (canvas_width * dpr).round() as u32;
+            let new_physical_height: u32 = (canvas_height * dpr).round() as u32;
             if let Some(renderer) = renderer_for_loop.borrow_mut().as_mut() {
                 if resize_dirty {
                     renderer.resize(new_physical_width, new_physical_height);
@@ -1697,8 +1860,8 @@ pub(crate) fn start_game_2d_webgl_loop(
                 renderer.set_uniform_2f(
                     &program_for_loop,
                     "u_canvas_size",
-                    GAME_2D_CANVAS_WIDTH as f32,
-                    GAME_2D_CANVAS_HEIGHT as f32,
+                    canvas_width as f32,
+                    canvas_height as f32,
                 );
                 renderer.set_uniform_4fv(
                     &program_for_loop,
