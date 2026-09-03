@@ -394,29 +394,39 @@ pub(crate) fn resolve_wall_collision(ball: &mut Ball, canvas_width: f64, canvas_
     }
 }
 
-/// Rescales ball positions and radii so they remain proportional when
-/// the canvas switches between inline (~820x547) and fullscreen
-/// (~1248x750) layouts.
+/// Rescales ball positions and the previous-step buffer so they
+/// remain proportional when the canvas switches between inline
+/// (~820x547) and fullscreen (~1248x750) layouts.
 ///
 /// Without this scaling, balls that were spawned in fullscreen retain
 /// their fullscreen coordinates after exiting, and `resolve_wall_collision`
 /// clamps them all to the floor of the smaller inline canvas — producing
-/// a dense pile-up that the impulse solver cannot separate (balls all want
-/// the same y, gravity keeps pulling them back, collision iterations are
-/// bounded). The ball radius also looks disproportionately large in the
-/// smaller canvas because it stays at the absolute `MIN_RADIUS..MAX_RADIUS`
-/// pixel range instead of scaling with the canvas.
+/// a dense pile-up that the impulse solver cannot separate (balls all
+/// want the same y, gravity keeps pulling them back, collision
+/// iterations are bounded).
+///
+/// **The ball radius is intentionally NOT rescaled.** Each ball's
+/// `radius` is set at spawn time from `random_ball_radius` (which
+/// already scales to the current canvas width), and it stays at that
+/// absolute pixel value for the ball's lifetime. Rescaling radius on
+/// every fullscreen toggle would let the radius drift — a 30px ball
+/// spawned in inline becomes 41px after entering fullscreen (1.371x
+/// scale), then 37px after exiting (0.657x scale), losing roughly 10%
+/// per round-trip and visibly shrinking over a few cycles. Keeping
+/// radius fixed at the spawn-time value gives a stable visual size that
+/// does not depend on how many times the user has toggled fullscreen.
 ///
 /// `old_width` / `old_height` are the canvas dimensions the balls were
 /// last physics-stepped against; `new_width` / `new_height` are the
-/// dimensions they will be physics-stepped against next. The ball's
-/// `position` is rescaled by `new/old` per axis, and `radius` is scaled
-/// by the smaller of the two ratios so balls stay inside the new bounds
-/// even when their parent ball had been placed in the corner.
+/// dimensions they will be physics-stepped against next. Ball
+/// positions are rescaled by `new/old` per axis. Positions are clamped
+/// to `[radius, new_w - radius]` x `[radius, new_h - radius]` as a
+/// safety net for any ball that ended up outside the new bounds due
+/// to compounded clamping or ball-to-ball overlap.
 ///
 /// The `prev_positions` buffer is rescaled in lockstep so the
-/// interpolate_balls extrapolation between physics steps keeps producing
-/// visually consistent positions across the resize.
+/// `interpolate_balls` extrapolation between physics steps keeps
+/// producing visually consistent positions across the resize.
 ///
 /// # Arguments
 ///
@@ -439,11 +449,11 @@ pub(crate) fn rescale_balls_to_canvas(
     }
     let scale_x: f64 = new_width / old_width;
     let scale_y: f64 = new_height / old_height;
-    let radius_scale: f64 = scale_x.min(scale_y);
     for ball in balls.iter_mut() {
         ball.position.set_x(ball.position.get_x() * scale_x);
         ball.position.set_y(ball.position.get_y() * scale_y);
-        ball.radius *= radius_scale;
+        // Radius is intentionally preserved — see the function-level
+        // doc for why. Only position is rescaled to the new canvas.
         let max_x: f64 = (new_width - ball.radius).max(ball.radius);
         let max_y: f64 = (new_height - ball.radius).max(ball.radius);
         if ball.position.get_x() < ball.radius {
@@ -610,14 +620,23 @@ pub(crate) fn render_balls_with_ssaa(
 ///
 /// # Returns
 ///
-/// Reads the current CSS pixel dimensions (clientWidth, clientHeight)
-/// of the canvas element matching the given selector.
+/// Reads the canvas element's CSS layout dimensions.
 ///
-/// Used in fullscreen-aware canvas setups so the SSAA backing buffer
-/// resizes to match the canvas's actual rendered size when the
-/// canvas switches between inline (smaller) and fullscreen (larger)
-/// layouts. Returns `None` if the canvas element is missing or the
-/// window/document is unavailable.
+/// Uses `getBoundingClientRect()` to read the actual CSS box size
+/// (width/height after layout), not `clientWidth`/`clientHeight` which
+/// in Chrome track `canvas.width`/`canvas.height` (the backing-store
+/// size). Reading the CSS box is critical during fullscreen
+/// transitions: the moment the user clicks Enter Fullscreen the CSS
+/// layout flips to the new size, but the canvas backing store still
+/// holds the previous size. If we used `clientWidth` here, the first
+/// resize tick would re-acquire the SSAA wrapper at the OLD backing
+/// dimensions, never call `set_width`, and leave the canvas display
+/// showing the previous-size content stretched to the new CSS box —
+/// a visible "first-frame distortion" that recovers only once the
+/// browser repaints after our later frames have grown the backing
+/// store. `getBoundingClientRect` returns the target CSS size
+/// immediately, so `SsaaCanvas::from_selector_with_scale` resizes the
+/// backing store to match on the very first post-resize frame.
 ///
 /// # Arguments
 ///
@@ -634,7 +653,8 @@ pub(crate) fn read_canvas_size(canvas_selector: &str) -> Option<(f64, f64)> {
         .ok()
         .flatten()?;
     let canvas: HtmlCanvasElement = element.unchecked_into();
-    Some((canvas.client_width() as f64, canvas.client_height() as f64))
+    let rect: DomRect = canvas.get_bounding_client_rect();
+    Some((rect.width(), rect.height()))
 }
 
 /// Acquires the 2D game canvas and its SSAA wrapper, sized to the
@@ -874,14 +894,12 @@ pub(crate) fn start_game_2d_loop(
         let alpha: f64 = (acc_clone.get() / GAME_2D_FIXED_TIMESTEP).clamp(0.0, 1.0);
         if dirty_clone.get() {
             // Capture the upcoming canvas size before dropping the SSAA
-            // wrapper so we can rescale ball positions and radii from the
-            // previous canvas dimensions into the new ones. Without this,
-            // balls spawned in fullscreen remain at their fullscreen
-            // coordinates after exiting to inline, and `resolve_wall_collision`
-            // clamps them all to the floor of the smaller canvas - producing
-            // a dense pile-up that the bounded-iteration impulse solver
-            // cannot separate. Scaling the radius alongside the position
-            // also keeps the visual proportion consistent across layouts.
+            // wrapper so we can rescale ball positions into the new
+            // canvas. Without this, balls spawned in fullscreen remain
+            // at their fullscreen coordinates after exiting to inline,
+            // and `resolve_wall_collision` clamps them all to the floor
+            // of the smaller canvas - producing a dense pile-up that
+            // the bounded-iteration impulse solver cannot separate.
             let new_size: (f64, f64) =
                 read_canvas_size(GAME_2D_CANVAS_SELECTOR).unwrap_or((0.0, 0.0));
             let (old_w, old_h) = *last_canvas_size_clone.borrow();
@@ -901,6 +919,62 @@ pub(crate) fn start_game_2d_loop(
             *context_clone.borrow_mut() = None;
             *canvas_cache.0.borrow_mut() = None;
             dirty_clone.set(false);
+        } else {
+            // Per-frame safety net for the fullscreen transition: the
+            // synthetic `resize` event dispatched by
+            // `enter_game_2d_fullscreen` runs synchronously inside the
+            // click handler, BEFORE the euv signal-driven DOM re-render
+            // flips the canvas CSS class. The debounce (100ms) then
+            // fires `resize_dirty` while the canvas DOM element still
+            // has its previous CSS box. The CSS layout update happens
+            // on a later animation frame, leaving the canvas's CSS box
+            // mismatched with its backing store for ~100ms. During
+            // that gap the browser stretches the OLD-size backing image
+            // into the NEW CSS box, producing a visible first-frame
+            // distortion that only recovers once the next debounced
+            // resize fires.
+            //
+            // Detect the mismatch by comparing the current CSS box
+            // (getBoundingClientRect, kept in sync with layout) against
+            // the cached canvas dimensions we last acquired against.
+            // When they diverge, force a synchronous backing-store
+            // resize on the same frame, collapsing the ~100ms
+            // distortion window.
+            let css_size: (f64, f64) =
+                read_canvas_size(GAME_2D_CANVAS_SELECTOR).unwrap_or((0.0, 0.0));
+            let (cached_w, cached_h) = *last_canvas_size_clone.borrow();
+            let css_mismatch: bool = css_size.0 > 0.0
+                && css_size.1 > 0.0
+                && (cached_w <= 0.0
+                    || cached_h <= 0.0
+                    || (css_size.0 - cached_w).abs() > 1.5
+                    || (css_size.1 - cached_h).abs() > 1.5);
+            if css_mismatch {
+                if let Some(canvas_el) = canvas_cache.0.borrow().as_ref() {
+                    let is_mobile: bool = web_sys::window()
+                        .and_then(|w| w.inner_width().ok())
+                        .and_then(|v: JsValue| v.as_f64())
+                        .is_some_and(|width: f64| width < 768.0);
+                    let dpr_value: f64 = if is_mobile { 1.0 } else { 2.0 };
+                    let target_w: u32 = (css_size.0 * dpr_value).round() as u32;
+                    let target_h: u32 = (css_size.1 * dpr_value).round() as u32;
+                    if canvas_el.width() != target_w || canvas_el.height() != target_h {
+                        canvas_el.set_width(target_w);
+                        canvas_el.set_height(target_h);
+                    }
+                }
+                rescale_balls_to_canvas(
+                    &mut balls.borrow_mut(),
+                    &mut prev_clone.borrow_mut(),
+                    cached_w,
+                    cached_h,
+                    css_size.0,
+                    css_size.1,
+                );
+                *last_canvas_size_clone.borrow_mut() = css_size;
+                *context_clone.borrow_mut() = None;
+                *canvas_cache.0.borrow_mut() = None;
+            }
         }
         if context_clone.borrow().is_none()
             && let Some((canvas_el, ssaa_canvas)) = acquire_game_2d_ssaa_canvas()
