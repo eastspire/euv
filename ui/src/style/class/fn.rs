@@ -1375,28 +1375,25 @@ class! {
         box-sizing: "border-box";
     }
 
-    // Letterbox wrapper that constrains the fullscreen game canvas to its
-    // native 16:9 aspect ratio regardless of viewport shape.
+    // Wrapper that fills the fullscreen game container with the canvas.
     //
-    // The game's `<canvas>` backing buffer is 800x450 (16:9). The
-    // surrounding `c_game_fullscreen_canvas_wrapper` fills the viewport
-    // with `flex: 1`, but the canvas inside has `width: 100%; height:
-    // 100%` — without an aspect-ratio constraint on an intermediate
-    // container, the canvas is stretched to whatever the viewport's
-    // width/height ratio is (e.g. 1280×800 → 1.6:1, slightly squashed
-    // vertically), making the balls render as horizontally-ovoid
-    // ellipses instead of circles. This 16:9 letterbox pads the empty
-    // space (top/bottom on widescreen viewports, left/right on portrait
-    // viewports) and lets the canvas display at the correct shape. The
-    // backing buffer keeps drawing in 800x450 logical coordinates; the
-    // browser uniformly scales the bitmap to fit the letterbox.
+    // The game's `<canvas>` backing buffer is 600x400 (3:2). The canvas
+    // itself has `width: 100%; height: 100%` so it fills this wrapper
+    // exactly, and `object-fit: contain` on the canvas class makes the
+    // browser uniformly scale the backing buffer to fit while preserving
+    // its 3:2 aspect ratio. Without `object-fit: contain`, the canvas
+    // would be stretched to whatever shape the wrapper has, making balls
+    // render as horizontally-ovoid ellipses (e.g. on 1280x800 viewports
+    // → 1.6:1, slightly squashed vertically). The letterbox bars appear
+    // inside the canvas element rather than around an outer wrapper, so
+    // the canvas always fills the fullscreen container with the backing
+    // buffer uniformly scaled to its native aspect ratio.
     pub c_game_fullscreen_canvas_letterbox {
         position: "relative";
-        aspect-ratio: "16 / 9";
         width: "100%";
         max-width: "100%";
         max-height: "100%";
-        height: "auto";
+        height: "100%";
         display: "flex";
         align-items: "center";
         justify-content: "center";
@@ -3595,16 +3592,16 @@ class! {
         top: "44px";
         right: "0px";
         /* `width: 100%` instead of `min-width: 140px` so the menu
-                                           matches the dropdown container (and therefore the
-                                           trigger button) width exactly. With only `min-width`,
-                                           a trigger wider than 140px (e.g. the 206px-wide
-                                           nav-column locale switcher button) leaves a large
-                                           empty gap on the left of the menu, since `right: 0`
-                                           anchors only the right edge to the container. With
-                                           `width: 100%`, the menu's left edge lines up with the
-                                           trigger's left edge. The default minimum content width
-                                           is still guaranteed by the inner items' own padding,
-                                           so we keep the rule without an explicit min. */
+                                                   matches the dropdown container (and therefore the
+                                                   trigger button) width exactly. With only `min-width`,
+                                                   a trigger wider than 140px (e.g. the 206px-wide
+                                                   nav-column locale switcher button) leaves a large
+                                                   empty gap on the left of the menu, since `right: 0`
+                                                   anchors only the right edge to the container. With
+                                                   `width: 100%`, the menu's left edge lines up with the
+                                                   trigger's left edge. The default minimum content width
+                                                   is still guaranteed by the inner items' own padding,
+                                                   so we keep the rule without an explicit min. */
         width: "100%";
         background: var!(background);
         border: format!("1px solid {}", var!(border));

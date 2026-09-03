@@ -31,10 +31,9 @@ class! {
         margin-bottom: var!(gap-component);
     }
 
-    pub c_game_canvas_wrapper(aspect_ratio: &str) {
+    pub c_game_canvas_wrapper {
         position: "relative";
         width: "100%";
-        aspect-ratio: aspect_ratio;
     }
 
     pub c_game_fullscreen_canvas_wrapper {
@@ -53,6 +52,7 @@ class! {
         display: "block";
         background: var!(accent);
         touch-action: "none";
+        object-fit: "contain";
     }
 
     pub c_game_2d_canvas {
@@ -62,6 +62,7 @@ class! {
         display: "block";
         background: var!(accent);
         touch-action: "none";
+        object-fit: "contain";
     }
 
     pub c_canvas_pixelated {
