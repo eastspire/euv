@@ -25,30 +25,37 @@ pub(crate) fn random_ball_color() -> &'static str {
     GAME_2D_BALL_COLORS[index % GAME_2D_BALL_COLORS.len()]
 }
 
-/// Returns a random ball radius within the allowed range.
+/// Returns a random ball radius within the allowed range, expressed in
+/// CSS pixels against the design reference `GAME_2D_CANVAS_WIDTH`.
 ///
-/// The constants `GAME_2D_BALL_MIN_RADIUS` / `GAME_2D_BALL_MAX_RADIUS`
-/// express the desired ball radius range as a fraction of the canvas
-/// width: 4 / 600 = 0.67% and 14 / 600 = 2.33% of a 600px-wide default
-/// canvas. Multiplying by the live canvas width keeps balls looking
-/// proportionally the same in both inline (~820px) and fullscreen
-/// (~1248px) layouts, instead of being a fixed pixel size that appears
-/// disproportionately large in the smaller canvas and disproportionately
-/// small in the larger one. The upper bound is intentionally tight so
-/// 100 balls can stack comfortably in the 600x400 inline canvas without
-/// triggering `GAME_2D_MAX_BALL_AREA_RATIO`'s jam path.
+/// The radius is intentionally **not** scaled by the live canvas width.
+/// The earlier scaled implementation (`fraction * canvas_width / 600`)
+/// read from `GAME_2D_CANVAS_SELECTOR`, which is `#game-2d-canvas` — but
+/// that selector targets the Canvas 2D tab's canvas, which is
+/// `display:none` when the user is on the WebGL or WebGPU tab. On those
+/// tabs `getBoundingClientRect()` returns `0 x 0`, so the helper fell
+/// back to `GAME_2D_CANVAS_WIDTH` (giving 4-14 px CSS radius), while on
+/// the Canvas 2D tab the real `clientWidth` (e.g. 820) was used (giving
+/// 5.5-19 px CSS radius). The two renderers produced visibly different
+/// ball sizes — exactly the inconsistency the user is asking us to fix.
+///
+/// Returning a constant 4-14 px CSS radius keeps every tab's balls
+/// identical at spawn time. The radius stays at this absolute CSS-pixel
+/// value for the lifetime of each ball: `rescale_balls_to_canvas`
+/// rescales *positions* (so a ball at 50% X stays at 50% X across
+/// fullscreen enter/exit) but explicitly preserves *radius* to avoid the
+/// cumulative round-trip drift described in that function's docstring.
+///
+/// The upper bound is intentionally tight so 100 balls can stack
+/// comfortably in the 600x400 inline canvas without triggering
+/// `GAME_2D_MAX_BALL_AREA_RATIO`'s jam path.
 ///
 /// # Returns
 ///
-/// - `f64` - The radius in CSS pixels, scaled to the current canvas width.
+/// - `f64` - The radius in CSS pixels.
 pub(crate) fn random_ball_radius() -> f64 {
     let raw: f64 = js_sys::Math::random();
-    let fraction: f64 =
-        GAME_2D_BALL_MIN_RADIUS + raw * (GAME_2D_BALL_MAX_RADIUS - GAME_2D_BALL_MIN_RADIUS);
-    let canvas_width: f64 = read_canvas_size(GAME_2D_CANVAS_SELECTOR)
-        .map(|(w, _)| w)
-        .unwrap_or(GAME_2D_CANVAS_WIDTH);
-    fraction * (canvas_width / GAME_2D_CANVAS_WIDTH)
+    GAME_2D_BALL_MIN_RADIUS + raw * (GAME_2D_BALL_MAX_RADIUS - GAME_2D_BALL_MIN_RADIUS)
 }
 
 /// Creates a new ball at the given position with a random upward velocity.
@@ -389,6 +396,29 @@ pub(crate) fn handle_rescale_dirty(
 /// WebGL / WebGPU paths handle their own backing-store resize inside the
 /// render block). Also runs the CSS-mismatch safety net that used to live
 /// inline in `start_game_2d_loop`.
+///
+/// **Crucially, `canvas_cache` is *not* dropped on rescale.** The Canvas
+/// 2D canvas DOM element survives fullscreen enter/exit unchanged — it is
+/// the same `<canvas>` that the euv engine re-keys from inline slot into
+/// `c_game_container_fullscreen` — so the `HtmlCanvasElement` reference in
+/// `canvas_cache` still points at a live element whose `clientWidth` /
+/// `clientHeight` reflect the new CSS box immediately after the resize
+/// event fires. Clearing `canvas_cache` here used to force the next
+/// physics tick to read `(cw, ch) = (0, 0)` from the `None` branch of
+/// the lookup, which made `resolve_wall_collision` clamp every ball to
+/// `y = radius` (the floor of a zero-height canvas) for a single frame
+/// before the SSAA re-acquire block on the line below caught up. That
+/// clamp-then-release behaviour is exactly the "balls reset to near-
+/// initial spawn positions" regression we are fixing.
+///
+/// Instead, `last_canvas_size_for_loop` is the single source of truth
+/// for "the dimensions the balls are about to be physics-stepped
+/// against". The Canvas 2D physics block reads from it (with a fallback
+/// to `canvas.client_width` for the very first frame before any resize
+/// has happened), so dropping the SSAA wrapper alone is sufficient to
+/// guarantee the SSAA backing store is re-acquired at the new size on
+/// the very next frame while the positions already see the right
+/// bounds.
 pub(crate) fn handle_rescale_dirty_canvas2d(
     resize_dirty_for_loop: &Rc<Cell<bool>>,
     last_canvas_size_for_loop: &Rc<RefCell<(f64, f64)>>,
@@ -400,32 +430,51 @@ pub(crate) fn handle_rescale_dirty_canvas2d(
     let (css_w, css_h): (f64, f64) =
         read_canvas_size(GAME_2D_CANVAS_SELECTOR).unwrap_or((0.0, 0.0));
     let (cached_w, cached_h) = *last_canvas_size_for_loop.borrow();
-    let css_mismatch: bool = css_w > 0.0
-        && css_h > 0.0
+    // Also probe the cached canvas DOM element: even when the euv
+    // signal-driven re-render has not yet committed the new CSS box,
+    // `canvas.clientWidth` may have already updated because the browser
+    // commits layout synchronously on a fullscreen toggle. Prefer it
+    // over `getBoundingClientRect` when both are available — it is
+    // exactly what the physics loop reads next frame.
+    let (canvas_w, canvas_h): (f64, f64) = canvas_cache
+        .0
+        .borrow()
+        .as_ref()
+        .map(|canvas| (canvas.client_width() as f64, canvas.client_height() as f64))
+        .unwrap_or((0.0, 0.0));
+    let (effective_w, effective_h): (f64, f64) = if canvas_w > 0.0 && canvas_h > 0.0 {
+        (canvas_w, canvas_h)
+    } else {
+        (css_w, css_h)
+    };
+    let css_mismatch: bool = effective_w > 0.0
+        && effective_h > 0.0
         && (cached_w <= 0.0
             || cached_h <= 0.0
-            || (css_w - cached_w).abs() > 1.5
-            || (css_h - cached_h).abs() > 1.5);
+            || (effective_w - cached_w).abs() > 1.5
+            || (effective_h - cached_h).abs() > 1.5);
     if resize_dirty_for_loop.get() {
         resize_dirty_for_loop.set(false);
-        if cached_w > 0.0 && cached_h > 0.0 && css_w > 0.0 && css_h > 0.0 {
+        if cached_w > 0.0 && cached_h > 0.0 && effective_w > 0.0 && effective_h > 0.0 {
             rescale_balls_to_canvas(
                 &mut balls.borrow_mut(),
                 &mut prev_for_loop.borrow_mut(),
                 cached_w,
                 cached_h,
-                css_w,
-                css_h,
+                effective_w,
+                effective_h,
             );
         }
-        if css_w > 0.0 && css_h > 0.0 {
-            *last_canvas_size_for_loop.borrow_mut() = (css_w, css_h);
-            // Drop the SSAA wrapper and the cached canvas element so
-            // the next acquire runs against the new CSS box.
+        if effective_w > 0.0 && effective_h > 0.0 {
+            *last_canvas_size_for_loop.borrow_mut() = (effective_w, effective_h);
+            // Drop ONLY the SSAA wrapper so the next acquire runs
+            // against the new CSS box. Leave `canvas_cache` populated —
+            // see the function-level docstring for why clearing it
+            // would force the next physics tick to clamp balls against
+            // a zero-size canvas and visibly reset their positions.
             *context_clone.borrow_mut() = None;
-            *canvas_cache.0.borrow_mut() = None;
         }
-    } else if css_mismatch && css_w > 0.0 && css_h > 0.0 {
+    } else if css_mismatch && effective_w > 0.0 && effective_h > 0.0 {
         // CSS-mismatch safety net: the synthetic resize event
         // dispatched on fullscreen enter/exit fires while the signal-
         // driven DOM re-render is still pending, so the debounce flag
@@ -436,12 +485,11 @@ pub(crate) fn handle_rescale_dirty_canvas2d(
             &mut prev_for_loop.borrow_mut(),
             cached_w,
             cached_h,
-            css_w,
-            css_h,
+            effective_w,
+            effective_h,
         );
-        *last_canvas_size_for_loop.borrow_mut() = (css_w, css_h);
+        *last_canvas_size_for_loop.borrow_mut() = (effective_w, effective_h);
         *context_clone.borrow_mut() = None;
-        *canvas_cache.0.borrow_mut() = None;
     }
 }
 
@@ -1198,12 +1246,26 @@ pub(crate) fn start_game_2d_loop(
             acc_clone.set(acc_clone.get() + frame_time);
             while acc_clone.get() >= GAME_2D_FIXED_TIMESTEP {
                 snapshot_ball_positions(&mut prev_clone.borrow_mut(), &balls.borrow());
-                let (cw, ch): (f64, f64) = canvas_cache
-                    .0
-                    .borrow()
-                    .as_ref()
-                    .map(|canvas| (canvas.client_width() as f64, canvas.client_height() as f64))
-                    .unwrap_or((0.0, 0.0));
+                // Prefer the cached dimensions that the rescale helper
+                // just refreshed. The Canvas 2D canvas DOM element is
+                // stable across fullscreen enter/exit (the euv engine
+                // re-keys it rather than recreating it), so its live
+                // `clientWidth` is also fine — but after a rescale the
+                // cached value reflects the post-rescale size even
+                // before the next frame's layout pass, which avoids a
+                // single-frame `(0, 0)` read if the browser has not yet
+                // committed the new CSS box on this tick.
+                let (cached_w, cached_h) = *last_canvas_size_clone.borrow();
+                let (cw, ch): (f64, f64) = if cached_w > 0.0 && cached_h > 0.0 {
+                    (cached_w, cached_h)
+                } else {
+                    canvas_cache
+                        .0
+                        .borrow()
+                        .as_ref()
+                        .map(|canvas| (canvas.client_width() as f64, canvas.client_height() as f64))
+                        .unwrap_or((0.0, 0.0))
+                };
                 update_balls(&mut balls.borrow_mut(), GAME_2D_FIXED_TIMESTEP, cw, ch);
                 acc_clone.set(acc_clone.get() - GAME_2D_FIXED_TIMESTEP);
             }
@@ -1850,12 +1912,28 @@ pub(crate) fn start_game_2d_webgpu_loop(
                 acc_clone.set(acc_clone.get() + frame_time);
                 while acc_clone.get() >= GAME_2D_FIXED_TIMESTEP {
                     snapshot_ball_positions(&mut prev_for_loop.borrow_mut(), &balls.borrow());
-                    let (cw, ch): (f64, f64) = canvas_cache
-                        .0
-                        .borrow()
-                        .as_ref()
-                        .map(|canvas| (canvas.client_width() as f64, canvas.client_height() as f64))
-                        .unwrap_or((0.0, 0.0));
+                    // Prefer the dimensions that the rescale helper
+                    // just refreshed. `last_canvas_size_for_loop` is the
+                    // single source of truth for "the dimensions the
+                    // balls are about to be physics-stepped against";
+                    // falling back to `canvas.client_width` only for
+                    // the very first frame (before any resize has
+                    // happened) avoids the single-frame `(0, 0)` read
+                    // that used to clamp balls to `(radius, radius)` on
+                    // fullscreen exit.
+                    let (cached_w, cached_h) = *last_canvas_size_for_loop.borrow();
+                    let (cw, ch): (f64, f64) = if cached_w > 0.0 && cached_h > 0.0 {
+                        (cached_w, cached_h)
+                    } else {
+                        canvas_cache
+                            .0
+                            .borrow()
+                            .as_ref()
+                            .map(|canvas| {
+                                (canvas.client_width() as f64, canvas.client_height() as f64)
+                            })
+                            .unwrap_or((0.0, 0.0))
+                    };
                     update_balls(&mut balls.borrow_mut(), GAME_2D_FIXED_TIMESTEP, cw, ch);
                     acc_clone.set(acc_clone.get() - GAME_2D_FIXED_TIMESTEP);
                 }
@@ -1885,13 +1963,21 @@ pub(crate) fn start_game_2d_webgpu_loop(
             // fullscreen. The WebGPU / WebGL canvases have their own
             // resize path here (see `renderer.resize` below) that is
             // driven by the same `resize_dirty` debounce, so we just
-            // swap the constant dimensions for runtime ones.
-            let (canvas_width, canvas_height): (f64, f64) = canvas_cache
-                .0
-                .borrow()
-                .as_ref()
-                .map(|canvas| (canvas.client_width() as f64, canvas.client_height() as f64))
-                .unwrap_or((0.0, 0.0));
+            // swap the constant dimensions for runtime ones. Prefer
+            // the cached value when present — it is updated the moment
+            // the rescale helper completes, while `client_width` only
+            // reflects whatever the browser has committed so far.
+            let (cached_w, cached_h) = *last_canvas_size_for_loop.borrow();
+            let (canvas_width, canvas_height): (f64, f64) = if cached_w > 0.0 && cached_h > 0.0 {
+                (cached_w, cached_h)
+            } else {
+                canvas_cache
+                    .0
+                    .borrow()
+                    .as_ref()
+                    .map(|canvas| (canvas.client_width() as f64, canvas.client_height() as f64))
+                    .unwrap_or((0.0, 0.0))
+            };
             let new_physical_width: u32 = (canvas_width * dpr).round() as u32;
             let new_physical_height: u32 = (canvas_height * dpr).round() as u32;
             // Borrow the renderer exactly once for the entire frame. We
@@ -2328,12 +2414,22 @@ pub(crate) fn start_game_2d_webgl_loop(
                 acc_clone.set(acc_clone.get() + frame_time);
                 while acc_clone.get() >= GAME_2D_FIXED_TIMESTEP {
                     snapshot_ball_positions(&mut prev_for_loop.borrow_mut(), &balls.borrow());
-                    let (cw, ch): (f64, f64) = canvas_cache
-                        .0
-                        .borrow()
-                        .as_ref()
-                        .map(|canvas| (canvas.client_width() as f64, canvas.client_height() as f64))
-                        .unwrap_or((0.0, 0.0));
+                    // Prefer the dimensions that the rescale helper
+                    // just refreshed (see the WebGPU loop for the full
+                    // rationale).
+                    let (cached_w, cached_h) = *last_canvas_size_for_loop.borrow();
+                    let (cw, ch): (f64, f64) = if cached_w > 0.0 && cached_h > 0.0 {
+                        (cached_w, cached_h)
+                    } else {
+                        canvas_cache
+                            .0
+                            .borrow()
+                            .as_ref()
+                            .map(|canvas| {
+                                (canvas.client_width() as f64, canvas.client_height() as f64)
+                            })
+                            .unwrap_or((0.0, 0.0))
+                    };
                     update_balls(&mut balls.borrow_mut(), GAME_2D_FIXED_TIMESTEP, cw, ch);
                     acc_clone.set(acc_clone.get() - GAME_2D_FIXED_TIMESTEP);
                 }
@@ -2356,13 +2452,20 @@ pub(crate) fn start_game_2d_webgl_loop(
             // fullscreen. The WebGPU / WebGL canvases have their own
             // resize path here (see `renderer.resize` below) that is
             // driven by the same `resize_dirty` debounce, so we just
-            // swap the constant dimensions for runtime ones.
-            let (canvas_width, canvas_height): (f64, f64) = canvas_cache
-                .0
-                .borrow()
-                .as_ref()
-                .map(|canvas| (canvas.client_width() as f64, canvas.client_height() as f64))
-                .unwrap_or((0.0, 0.0));
+            // swap the constant dimensions for runtime ones. Prefer
+            // the cached value when present (see the WebGPU loop for
+            // the same rationale).
+            let (cached_w, cached_h) = *last_canvas_size_for_loop.borrow();
+            let (canvas_width, canvas_height): (f64, f64) = if cached_w > 0.0 && cached_h > 0.0 {
+                (cached_w, cached_h)
+            } else {
+                canvas_cache
+                    .0
+                    .borrow()
+                    .as_ref()
+                    .map(|canvas| (canvas.client_width() as f64, canvas.client_height() as f64))
+                    .unwrap_or((0.0, 0.0))
+            };
             let new_physical_width: u32 = (canvas_width * dpr).round() as u32;
             let new_physical_height: u32 = (canvas_height * dpr).round() as u32;
             if let Some(renderer) = renderer_for_loop.borrow_mut().as_mut() {
