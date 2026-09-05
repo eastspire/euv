@@ -14,9 +14,11 @@ mod easing;
 mod engine;
 mod entity;
 mod input;
+mod lighting;
 mod math;
 mod particle;
 mod physics;
+mod raytracing;
 mod renderer;
 mod scene;
 mod scheduler;
@@ -29,8 +31,8 @@ mod tween;
 use wasm_bindgen::JsValue;
 pub use {
     asset::*, audio::*, cell::*, collider::*, config::*, easing::*, engine::*, entity::*, input::*,
-    math::*, particle::*, physics::*, renderer::*, scene::*, scheduler::*, spatial::*, sprite::*,
-    timer::*, tween::*,
+    lighting::*, math::*, particle::*, physics::*, raytracing::*, renderer::*, scene::*,
+    scheduler::*, spatial::*, sprite::*, timer::*, tween::*,
 };
 
 pub use std::{

@@ -490,7 +490,7 @@ impl RigidBody3D {
     /// - `RigidBody3D` - The new body.
     pub fn new_dynamic(id: u64, position: Vector3D) -> RigidBody3D {
         let mass: f64 = PHYSICS_DEFAULT_MASS;
-        RigidBody3D::new(
+        let mut body: RigidBody3D = RigidBody3D::new(
             id,
             position,
             mass,
@@ -498,7 +498,9 @@ impl RigidBody3D {
             DEFAULT_RESTITUTION,
             DEFAULT_FRICTION,
             BodyType::Dynamic,
-        )
+        );
+        body.update_inertia(mass);
+        body
     }
 
     /// Creates a new static 3D rigid body at the given position with infinite mass.
@@ -565,11 +567,21 @@ impl RigidBody3D {
         self.set_inverse_mass(if mass > 0.0 { 1.0 / mass } else { 0.0 });
     }
 
+    /// Sets the moment of inertia of the body, updating the inverse inertia.
+    /// An inertia of 0 makes the body non-rotatable (used for static bodies).
+    ///
+    /// # Arguments
+    ///
+    /// - `f64` - The new moment of inertia.
+    pub fn update_inertia(&mut self, inertia: f64) {
+        self.set_inverse_inertia(if inertia > 0.0 { 1.0 / inertia } else { 0.0 });
+    }
+
     /// Returns `true` if this body is affected by forces and collisions.
     ///
     /// # Returns
     ///
-    /// - `bool` - True if the body is dynamic.
+    /// - `bool` - True if this body is dynamic.
     pub fn is_dynamic(&self) -> bool {
         self.get_body_type() == BodyType::Dynamic
     }
@@ -711,6 +723,9 @@ impl PhysicsWorld3D {
             *body.get_mut_position() += current_velocity.scaled(delta_time);
             body.set_force_accumulator(Vector3D::zero());
             *body.get_mut_angular_velocity() *= angular_damping;
+            let body_inverse_inertia: f64 = body.get_inverse_inertia();
+            let torque: Vector3D = body.get_torque_accumulator();
+            *body.get_mut_angular_velocity() += torque.scaled(body_inverse_inertia * delta_time);
             let angular_velocity: Vector3D = body.get_angular_velocity();
             let rotation_delta: Quaternion = Quaternion::new(
                 angular_velocity.get_x() * delta_time * 0.5,
@@ -913,5 +928,144 @@ impl Default for PhysicsWorld3D {
     /// - `PhysicsWorld3D` - A default-constructed instance with the documented initial state.
     fn default() -> PhysicsWorld3D {
         PhysicsWorld3D::with_config(PhysicsConfig3D::default())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Regression tests for the 3D physics step pipeline.
+    //!
+    //! These tests live inline (rather than under `engine/tests/`) because the
+    //! `physics` module does not yet `pub use r#impl`, so external tests cannot
+    //! reach methods like `step()` or `apply_torque()`. Once the module is
+    //! reorganised to expose impls publicly, these can move to an integration
+    //! test target alongside `input/fn.rs` and `webgpu/fn.rs`.
+    use super::*;
+
+    const EPSILON: f64 = 1e-9;
+
+    /// Regression test for the bug where `RigidBody3D::apply_torque`
+    /// accumulated torque into `torque_accumulator` but
+    /// `PhysicsWorld3D::step()` only zeroed it without ever converting it
+    /// into angular velocity.
+    #[test]
+    fn step_applies_torque_to_3d_angular_velocity() {
+        let mut world: PhysicsWorld3D = PhysicsWorld3D::default();
+        let mut body: RigidBody3D = RigidBody3D::new_dynamic(1, Vector3D::new(0.0, 0.0, 0.0));
+        // Default inertia = mass (1.0) so inverse_inertia == 1.0; applying
+        // torque (0, 0, 2) for a 1 s step should give omega == (0, 0, 2).
+        body.apply_torque(Vector3D::new(0.0, 0.0, 2.0));
+        world.add_body(body);
+
+        world.step(1.0);
+        let omega: Vector3D = world.get_body(1).unwrap().get_angular_velocity();
+        assert!(
+            omega.get_x().abs() < EPSILON,
+            "unexpected x angular velocity: {}",
+            omega.get_x(),
+        );
+        assert!(
+            omega.get_y().abs() < EPSILON,
+            "unexpected y angular velocity: {}",
+            omega.get_y(),
+        );
+        let expected_z: f64 = 2.0;
+        assert!(
+            (omega.get_z() - expected_z).abs() < EPSILON,
+            "expected z angular velocity {}, got {}",
+            expected_z,
+            omega.get_z(),
+        );
+
+        // Accumulator must be cleared after the step so subsequent steps do
+        // not re-apply the same torque.
+        world.step(1.0);
+        let omega_after: Vector3D = world.get_body(1).unwrap().get_angular_velocity();
+        assert!(
+            (omega_after.get_z() - expected_z).abs() < EPSILON,
+            "torque_accumulator leaked into a second step: z = {}",
+            omega_after.get_z(),
+        );
+    }
+
+    /// Static bodies (inverse_inertia == 0) must ignore torque entirely:
+    /// applying torque to a static body must not produce angular velocity.
+    #[test]
+    fn step_static_3d_body_ignores_torque() {
+        let mut world: PhysicsWorld3D = PhysicsWorld3D::default();
+        let mut body: RigidBody3D = RigidBody3D::new_static(1, Vector3D::new(0.0, 0.0, 0.0));
+        body.apply_torque(Vector3D::new(1.0, 0.0, 0.0));
+        world.add_body(body);
+
+        world.step(1.0);
+        let omega: Vector3D = world.get_body(1).unwrap().get_angular_velocity();
+        assert!(
+            omega.get_x().abs() < EPSILON
+                && omega.get_y().abs() < EPSILON
+                && omega.get_z().abs() < EPSILON,
+            "static body must remain rotationally inert, got ({}, {}, {})",
+            omega.get_x(),
+            omega.get_y(),
+            omega.get_z(),
+        );
+    }
+
+    /// Torque applied across multiple steps must accumulate into angular
+    /// velocity. Guards against the original bug returning silently.
+    #[test]
+    fn step_torque_accumulates_over_multiple_steps() {
+        let mut world: PhysicsWorld3D = PhysicsWorld3D::default();
+        let body: RigidBody3D = RigidBody3D::new_dynamic(1, Vector3D::new(0.0, 0.0, 0.0));
+        world.add_body(body);
+
+        for _ in 0..4 {
+            world
+                .get_body_mut(1)
+                .unwrap()
+                .apply_torque(Vector3D::new(0.0, 1.0, 0.0));
+            world.step(1.0);
+        }
+        let omega: Vector3D = world.get_body(1).unwrap().get_angular_velocity();
+        // Each step: omega_y += torque_y * inv_inertia * dt = 1.0.
+        // After 4 steps: omega_y == 4.0.
+        assert!(
+            (omega.get_y() - 4.0).abs() < EPSILON,
+            "expected cumulative angular velocity 4.0 on y axis, got {}",
+            omega.get_y(),
+        );
+    }
+
+    /// `update_inertia(0)` must zero out `inverse_inertia`, making torque
+    /// application inert for that body until the inertia is restored.
+    #[test]
+    fn update_inertia_zeros_inverse_inertia() {
+        let mut body: RigidBody3D = RigidBody3D::new_dynamic(1, Vector3D::new(0.0, 0.0, 0.0));
+        assert!(
+            (body.get_inverse_inertia() - 1.0).abs() < EPSILON,
+            "default inverse_inertia must equal 1/mass = 1.0, got {}",
+            body.get_inverse_inertia(),
+        );
+        body.update_inertia(0.0);
+        assert!(
+            body.get_inverse_inertia().abs() < EPSILON,
+            "update_inertia(0) must zero out inverse_inertia, got {}",
+            body.get_inverse_inertia(),
+        );
+    }
+
+    /// 2D angular integration is unchanged by the 3D torque fix.
+    #[test]
+    fn step_2d_angular_velocity_unchanged() {
+        let mut world: PhysicsWorld2D = PhysicsWorld2D::default();
+        let body: RigidBody2D = RigidBody2D::new_dynamic(1, Vector2D::new(0.0, 0.0));
+        world.add_body(body);
+
+        world.step(1.0);
+        let omega: f64 = world.get_body(1).unwrap().get_angular_velocity();
+        assert!(
+            omega.abs() < EPSILON,
+            "2D angular velocity should remain 0 with no input, got {}",
+            omega,
+        );
     }
 }

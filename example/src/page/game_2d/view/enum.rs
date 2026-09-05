@@ -10,4 +10,6 @@ pub(crate) enum Game2DTab {
     WebGl,
     /// The WebGPU rendering backend tab.
     WebGpu,
+    /// The CPU Phong lighting demo tab.
+    Lighting,
 }
