@@ -1335,6 +1335,7 @@ pub(crate) fn game_3d_on_tab_select(
         fullscreen.get_canvas_2d().set(false);
         fullscreen.get_web_gl().set(false);
         fullscreen.get_web_gpu().set(false);
+        fullscreen.get_ray_trace().set(false);
         tab.set(value);
     }))
 }
@@ -2206,6 +2207,7 @@ pub(crate) fn start_game_3d_webgl_loop(
 /// 1. canvas_2d
 /// 2. web_gl
 /// 3. web_gpu
+/// 4. ray_trace
 ///
 /// # Returns
 ///
@@ -2215,6 +2217,7 @@ pub(crate) fn use_game_3d_fullscreen_state() -> UseGame3DFullscreen {
         canvas_2d: App::use_signal(|| false),
         web_gl: App::use_signal(|| false),
         web_gpu: App::use_signal(|| false),
+        ray_trace: App::use_signal(|| false),
     }
 }
 
@@ -2331,6 +2334,9 @@ pub(crate) fn use_game_3d_fullscreen_popstate(state: UseGame3DFullscreen) -> usi
             true
         } else if state.get_web_gpu().get() {
             exit_game_3d_fullscreen_from_popstate(state.get_web_gpu());
+            true
+        } else if state.get_ray_trace().get() {
+            exit_game_3d_fullscreen_from_popstate(state.get_ray_trace());
             true
         } else {
             false

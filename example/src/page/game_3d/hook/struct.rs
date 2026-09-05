@@ -125,4 +125,8 @@ pub(crate) struct UseGame3DFullscreen {
     /// Whether the WebGPU tab is currently in landscape fullscreen.
     #[get(type(copy))]
     pub(crate) web_gpu: Signal<bool>,
+    /// Whether the RayTrace (software raytracer) tab is currently in
+    /// landscape fullscreen.
+    #[get(type(copy))]
+    pub(crate) ray_trace: Signal<bool>,
 }
