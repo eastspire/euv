@@ -24,6 +24,7 @@ mod list;
 mod modal;
 mod not_found;
 mod observer;
+mod raytrace;
 mod select;
 mod sse;
 mod timer;
@@ -35,8 +36,8 @@ pub(crate) use {
     about::*, animation::*, attrs::*, badge::*, binding::*, browser::*, camera::*, canvas::*,
     conditional::*, counter::*, dynamic::*, event::*, file::*, form::*, game_2d::*, game_3d::*,
     hooks_async::*, hooks_i18n::*, hooks_protect::*, hooks_timing::*, keep_alive::*, lifecycle::*,
-    list::*, modal::*, not_found::*, observer::*, select::*, sse::*, timer::*, virtual_list::*,
-    webgpu_status::*, websocket::*,
+    list::*, modal::*, not_found::*, observer::*, raytrace::*, select::*, sse::*, timer::*,
+    virtual_list::*, webgpu_status::*, websocket::*,
 };
 
 use super::*;

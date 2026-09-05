@@ -10,6 +10,4 @@ pub(crate) enum Game3DTab {
     WebGl,
     /// The WebGPU rendering backend tab.
     WebGpu,
-    /// The software ray tracer tab.
-    RayTrace,
 }
