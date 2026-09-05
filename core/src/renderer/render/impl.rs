@@ -308,12 +308,23 @@ impl Renderer {
                             AttributeValue::Text(value) => {
                                 element.set_attribute_or_property(new_attr.get_name(), value);
                             }
+                            AttributeValue::StaticText(value) => {
+                                element.set_attribute_or_property(new_attr.get_name(), value);
+                            }
                             AttributeValue::Signal(signal) => {
                                 let value: String = signal.get();
                                 element.set_attribute_or_property(new_attr.get_name(), &value);
                             }
                             AttributeValue::Dynamic(_) => {}
                             AttributeValue::Css(css) => {
+                                css.inject_style();
+                                element
+                                    .set_attribute_or_property(new_attr.get_name(), css.get_name());
+                            }
+                            // OPT 11: CssRef shares `Css` handling — inject
+                            // the style once (idempotent), then use the
+                            // class name with no per-element clone.
+                            AttributeValue::CssRef(css) => {
                                 css.inject_style();
                                 element
                                     .set_attribute_or_property(new_attr.get_name(), css.get_name());
@@ -721,6 +732,11 @@ impl Renderer {
                         AttributeValue::Text(value) => {
                             element.set_attribute_or_property(attr.get_name(), value);
                         }
+                        // OPT 10: StaticText behaves identically to Text but
+                        // skips the heap allocation entirely.
+                        AttributeValue::StaticText(value) => {
+                            element.set_attribute_or_property(attr.get_name(), value);
+                        }
                         AttributeValue::Signal(signal) => {
                             let signal: Signal<String> = *signal;
                             let initial_value: String = signal.get();
@@ -751,6 +767,14 @@ impl Renderer {
                         }
                         AttributeValue::Dynamic(_) => {}
                         AttributeValue::Css(css) => {
+                            css.inject_style();
+                            element.set_attribute_or_property(attr.get_name(), css.get_name());
+                        }
+                        // OPT 11: CssRef — zero-copy path for static
+                        // classes produced by `class!`. The shared
+                        // `OnceLock<Css>` keeps the storage alive for the
+                        // program's lifetime so the borrow is `'static`.
+                        AttributeValue::CssRef(css) => {
                             css.inject_style();
                             element.set_attribute_or_property(attr.get_name(), css.get_name());
                         }
