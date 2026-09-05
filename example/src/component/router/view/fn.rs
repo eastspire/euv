@@ -92,6 +92,9 @@ pub(crate) fn page_router(node: VirtualNode<PageRouterProps>) -> VirtualNode {
                 "/observer" => {
                     page_observer {}
                 }
+                "/raytrace" => {
+                    page_raytrace {}
+                }
                 "/sse" => {
                     page_sse {}
                 }
