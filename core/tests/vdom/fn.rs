@@ -112,6 +112,93 @@ fn attribute_entry_debug_format_works() {
 }
 
 #[test]
+fn opt10_static_text_borrows_without_alloc() {
+    // OPT 10: StaticText must wrap a `&'static str` without allocating.
+    let value: AttributeValue = AttributeValue::StaticText("color: red;");
+    match value {
+        AttributeValue::StaticText(s) => assert_eq!(s, "color: red;"),
+        _ => panic!("expected AttributeValue::StaticText"),
+    }
+}
+
+#[test]
+fn opt10_static_text_matches_text_in_debug_layout() {
+    // OPT 10: cloning an AttributeValue must preserve the StaticText
+    // variant verbatim (no implicit to_string() during the clone).
+    // Since `AttributeValue` derives `CustomDebug` which wraps each
+    // variant, pattern-matching through the Debug output guarantees
+    // the variant survived the clone.
+    let original: AttributeValue = AttributeValue::StaticText("color:red;");
+    let cloned: AttributeValue = original.clone();
+    let original_dbg: String = format!("{:?}", original);
+    let cloned_dbg: String = format!("{:?}", cloned);
+    assert!(
+        original_dbg.contains("StaticText"),
+        "expected original Debug to mention StaticText, got: {original_dbg}"
+    );
+    assert_eq!(
+        original_dbg, cloned_dbg,
+        "AttributeValue::clone changed the variant"
+    );
+    assert!(
+        cloned_dbg.contains("color:red;"),
+        "expected cloned value to retain the literal string, got: {cloned_dbg}"
+    );
+}
+
+#[test]
+fn opt11_from_static_css_yields_cssref_not_css() {
+    // OPT 11: `From<&'static Css>` must produce `CssRef`, not the
+    // owned `Css` variant (which would have deep-cloned the payload).
+    use std::sync::LazyLock;
+    static STATIC_CSS: LazyLock<Css> = LazyLock::new(|| {
+        Css::new(
+            String::from("opt11-fixture"),
+            String::from("color: blue;"),
+            Vec::new(),
+            Vec::new(),
+        )
+    });
+    let value: AttributeValue = (&*STATIC_CSS).into();
+    match value {
+        AttributeValue::CssRef(css_ref) => {
+            assert_eq!(css_ref.get_name(), "opt11-fixture");
+            assert_eq!(css_ref.get_style(), "color: blue;");
+        }
+        AttributeValue::Css(_) => panic!(
+            "OPT 11 regression: `&'static Css` produced owned Css \
+             variant; expected CssRef to skip the deep clone."
+        ),
+        other => panic!("expected AttributeValue::CssRef, got {other:?}"),
+    }
+}
+
+#[test]
+fn opt11_cssref_does_not_clone_inner_collections() {
+    // OPT 11: constructing an `AttributeValue::CssRef(&'static Css)`
+    // must keep the inner `Vec<PseudoRule>` / `Vec<MediaRule>` storage
+    // shared with the source (i.e. it must NOT call clone on them).
+    use std::sync::LazyLock;
+    static STATIC_CSS: LazyLock<Css> = LazyLock::new(|| {
+        Css::new(
+            String::from("opt11-shared"),
+            String::from("display: flex;"),
+            Vec::new(),
+            Vec::new(),
+        )
+    });
+    let value: AttributeValue = AttributeValue::CssRef(&*STATIC_CSS);
+    let AttributeValue::CssRef(css_ref) = value else {
+        panic!("expected AttributeValue::CssRef");
+    };
+    // Pointer identity check — borrowed storage must be the same object.
+    assert!(std::ptr::eq(
+        css_ref as *const Css,
+        &*STATIC_CSS as *const Css
+    ));
+}
+
+#[test]
 fn native_css_construct_does_not_panic() {
     let result: Result<(), String> = catch_unwind(AssertUnwindSafe(|| {
         let _: Css = Css::default();

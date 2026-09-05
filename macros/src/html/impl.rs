@@ -691,8 +691,12 @@ impl ToTokens for HtmlAttrValue {
                         }
                         css_string.push(CHAR_CSS_DECL_TERMINATOR);
                     }
+                    // OPT 10: emit the static CSS string as a `&'static str`
+                    // literal wrapped in `StaticText`, skipping the
+                    // `css_string.to_string()` heap allocation that the
+                    // previous emit produced on every mount.
                     tokens.extend(quote! {
-                        #css_string.to_string()
+                        ::euv::AttributeValue::StaticText(#css_string)
                     });
                 } else {
                     let key_value_tokens: Vec<proc_macro2::TokenStream> = props

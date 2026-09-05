@@ -8,6 +8,14 @@ use super::*;
 pub enum AttributeValue {
     /// A static string value.
     Text(String),
+    /// OPT 10: a `'static` string slice that bypasses the runtime allocation
+    /// that `Text(String)` would require.
+    ///
+    /// Used by the `html!` and `class!` macros when every component of the
+    /// value is a string literal (e.g. `style: { color: "red" }` or
+    /// `class: "static-class-name"`). Renderer treats this exactly like
+    /// `Text(value.to_string())` minus the heap allocation.
+    StaticText(&'static str),
     /// A dynamic signal-backed value.
     #[debug(skip)]
     Signal(Signal<String>),
@@ -18,6 +26,15 @@ pub enum AttributeValue {
     Dynamic(String),
     /// A CSS class reference created by the `class!` macro.
     Css(Css),
+    /// OPT 11: a borrowed `'static` reference to a `Css` produced by the
+    /// `class!` macro, avoiding the deep `Css::clone()` that the owned
+    /// [`AttributeValue::Css`] variant performs.
+    ///
+    /// The reference points to the `OnceLock<Css>` instance that `class!`
+    /// returns, so the lifetime is `'static` for the duration of the
+    /// program. Renderers inject the style on first sight and then read
+    /// the class name through the reference with zero copies.
+    CssRef(&'static Css),
     /// A raw HTML fragment assigned via the `inner_html:` attribute.
     ///
     /// Replaces the element's children wholesale via

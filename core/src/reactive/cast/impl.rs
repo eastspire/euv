@@ -140,19 +140,27 @@ impl From<Css> for AttributeValue {
     }
 }
 
-/// Converts a reference to a CSS class into an attribute value by cloning.
+/// Converts a reference to a CSS class into an attribute value without cloning.
+///
+/// OPT 11: previously this impl deep-cloned the `Css` struct (name, style,
+/// pseudo_rules, media_rules) every time a static class was referenced from
+/// `html!`. The `class!` macro produces `&'static Css` references backed
+/// by `OnceLock`, so storing the reference directly is sound and removes
+/// the per-element allocation.
 impl From<&'static Css> for AttributeValue {
-    /// Converts this CSS class reference into an `AttributeValue::Css` by cloning.
+    /// Converts this CSS class reference into an `AttributeValue::CssRef`
+    /// without cloning.
     ///
     /// # Returns
     ///
-    /// - `AttributeValue` - A CSS class attribute value.
+    /// - `AttributeValue` - A CSS class attribute value borrowing the
+    ///   `class!` macro's static storage.
     ///
     /// # Arguments
     ///
     /// - `&'static Css` - Input value to convert from.
     fn from(css: &'static Css) -> Self {
-        AttributeValue::Css(css.clone())
+        AttributeValue::CssRef(css)
     }
 }
 
