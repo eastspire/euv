@@ -1700,6 +1700,7 @@ pub(crate) fn game_2d_on_tab_select(
         fullscreen.get_canvas_2d().set(false);
         fullscreen.get_web_gl().set(false);
         fullscreen.get_web_gpu().set(false);
+        fullscreen.get_lighting().set(false);
         tab.set(value);
     }))
 }
@@ -2079,6 +2080,7 @@ pub(crate) fn start_game_2d_webgpu_loop(
 /// 1. canvas_2d
 /// 2. web_gl
 /// 3. web_gpu
+/// 4. lighting
 ///
 /// # Returns
 ///
@@ -2088,6 +2090,7 @@ pub(crate) fn use_game_2d_fullscreen_state() -> UseGame2DFullscreen {
         canvas_2d: App::use_signal(|| false),
         web_gl: App::use_signal(|| false),
         web_gpu: App::use_signal(|| false),
+        lighting: App::use_signal(|| false),
     }
 }
 
@@ -2178,7 +2181,7 @@ pub(crate) fn exit_game_2d_fullscreen_from_popstate(tab: Signal<bool>) {
 /// Subscribes to browser `popstate` events to handle the system back
 /// button while the 2D game is in landscape fullscreen mode.
 ///
-/// Watches all three tab-specific fullscreen signals. When any one is
+/// Watches all four tab-specific fullscreen signals. When any one is
 /// `true`, the corresponding `exit_game_2d_fullscreen_from_popstate`
 /// runs and the guard returns `true` to consume the `popstate` event.
 /// Otherwise returns `false` so the overlay stack or router can handle
@@ -2203,6 +2206,9 @@ pub(crate) fn use_game_2d_fullscreen_popstate(state: UseGame2DFullscreen) -> usi
             true
         } else if state.get_web_gpu().get() {
             exit_game_2d_fullscreen_from_popstate(state.get_web_gpu());
+            true
+        } else if state.get_lighting().get() {
+            exit_game_2d_fullscreen_from_popstate(state.get_lighting());
             true
         } else {
             false
