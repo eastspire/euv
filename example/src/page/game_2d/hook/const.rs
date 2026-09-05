@@ -266,40 +266,6 @@ pub(crate) const GAME_2D_WEBGL_LOADING_CANVAS_ID: &str = "game-2d-webgl-loading-
 /// The CSS selector for the 2D WebGL loading overlay canvas.
 pub(crate) const GAME_2D_WEBGL_LOADING_CANVAS_SELECTOR: &str = "#game-2d-webgl-loading-canvas";
 
-/// The HTML `id` attribute value for the 2D Lighting demo canvas element.
-pub(crate) const GAME_2D_LIGHTING_CANVAS_ID: &str = "game-2d-lighting-canvas";
-
-/// The CSS selector for the 2D Lighting demo canvas element.
-pub(crate) const GAME_2D_LIGHTING_CANVAS_SELECTOR: &str = "#game-2d-lighting-canvas";
-
-/// The Canvas 2D context type identifier passed to `HTMLCanvasElement::get_context`.
-///
-/// Mirrors the local constant in the `canvas` page so the lighting
-/// demo does not depend on engine-internal symbols.
-pub(crate) const GAME_2D_LIGHTING_CONTEXT_TYPE: &str = "2d";
-
-/// The JS property key for `CanvasRenderingContext2d::fillStyle`.
-pub(crate) const GAME_2D_LIGHTING_PROPERTY_FILL_STYLE: &str = "fillStyle";
-
-/// Logical width of the Lighting tab's offscreen render buffer.
-///
-/// The canvas backing buffer uses this resolution so a full per-pixel
-/// Phong pass stays under ~15ms per frame in wasm (256x192 = ~49k
-/// `fill_rect` calls). The CSS box scales the buffer to fit the visible
-/// canvas via the `c_game_2d_canvas` style.
-pub(crate) const GAME_2D_LIGHTING_WIDTH: f64 = 256.0;
-
-/// Logical height of the Lighting tab's offscreen render buffer.
-pub(crate) const GAME_2D_LIGHTING_HEIGHT: f64 = 192.0;
-
-/// Z position of the eye used as the view direction for the Phong
-/// specular term in the Lighting demo.
-///
-/// The tab renders onto a 2D canvas, so we synthesise a fixed
-/// "out-of-screen" eye at this Z to keep the specular highlight stable
-/// across frames.
-pub(crate) const GAME_2D_LIGHTING_EYE_Z: f64 = 2.0;
-
 /// The GLSL ES 3.00 vertex shader source for the 2D WebGL bouncing balls demo.
 ///
 /// Mirrors the WGSL balls shader: per-ball quads are generated procedurally

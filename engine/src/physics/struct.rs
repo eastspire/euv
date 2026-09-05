@@ -162,14 +162,6 @@ pub struct RigidBody3D {
     #[get_mut(pub(crate))]
     #[set(pub(crate))]
     pub(crate) inverse_mass: f64,
-    /// The precomputed inverse moment of inertia (scalar, axis-aligned). Static
-    /// bodies have 0 inverse inertia. Used to convert accumulated torque into
-    /// angular velocity each step.
-    #[get(pub(crate), type(copy))]
-    #[get_mut(pub(crate))]
-    #[set(pub(crate))]
-    #[new(skip)]
-    pub(crate) inverse_inertia: f64,
     /// The restitution (bounciness) coefficient in the range 0.0 to 1.0.
     #[get(type(copy))]
     pub(crate) restitution: f64,

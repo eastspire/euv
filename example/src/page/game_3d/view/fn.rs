@@ -26,7 +26,7 @@ pub(crate) fn page_game_3d(node: VirtualNode<PageGame3DProps>) -> VirtualNode {
             euv_header {
                 icon: "🎲"
                 title: "3D Game Engine"
-                subtitle: "A rotating cubes 3D demo powered by euv-engine's Vector3D, Quaternion, Matrix4x4, and Camera3D. Drag to orbit the camera. Switch tabs to compare Canvas 2D and WebGPU rendering backends. Switch to the RayTrace tab to see a software ray-traced scene with mirror reflection and emissive surfaces."
+                subtitle: "A rotating cubes 3D demo powered by euv-engine's Vector3D, Quaternion, Matrix4x4, and Camera3D. Drag to orbit the camera. Switch tabs to compare Canvas 2D and WebGPU rendering backends."
             }
             euv_card {
                 title: "3D Rendering Demo"
@@ -59,15 +59,6 @@ pub(crate) fn page_game_3d(node: VirtualNode<PageGame3DProps>) -> VirtualNode {
                         onclick: game_3d_on_tab_select(tab, Game3DTab::WebGpu, fullscreen)
                         "GPU"
                     }
-                    div {
-                        class: if { tab.get() == Game3DTab::RayTrace } {
-                            c_tab_item_active()
-                        } else {
-                            c_tab_item_inactive()
-                        }
-                        onclick: game_3d_on_tab_select(tab, Game3DTab::RayTrace, fullscreen)
-                        "RT"
-                    }
                 }
                 match { tab } {
                     Game3DTab::Canvas2D => {
@@ -83,11 +74,6 @@ pub(crate) fn page_game_3d(node: VirtualNode<PageGame3DProps>) -> VirtualNode {
                     Game3DTab::WebGpu => {
                         div {
                             game_3d_webgpu_tab(use_game_3d_webgpu_state(), fullscreen)
-                        }
-                    }
-                    Game3DTab::RayTrace => {
-                        div {
-                            game_3d_raytrace_tab(use_game_3d_raytrace_state(), fullscreen)
                         }
                     }
                 }
@@ -111,12 +97,6 @@ pub(crate) fn page_game_3d(node: VirtualNode<PageGame3DProps>) -> VirtualNode {
                         p {
                             class: c_game_description()
                             "This demo uses euv-engine's WebGlRenderer to acquire a WebGL 2 context, compile a GLSL ES 3.00 program, and render the same rotating cubes scene as the Canvas 2D tab: every cube is drawn as 12 shader-generated triangles with per-cube transform and colors uploaded to vec4 uniform arrays each frame via requestAnimationFrame. Drag on the canvas to orbit the camera. Works in every modern browser with WebGL 2 support."
-                        }
-                    }
-                    Game3DTab::RayTrace => {
-                        p {
-                            class: c_game_description()
-                            "This demo uses euv-engine's raytracing module to drive a software ray tracer directly on the Canvas 2D backing buffer: every frame, for every pixel, the camera fires a primary Ray through the scene of three occluders (one mirror sphere, one emissive sphere, one ground AABB) using trace_default, which recursively reflects up to RAYTRACE_DEFAULT_MAX_BOUNCES. LightingUniforms::shade combines ambient, Lambertian diffuse, and Blinn-Phong specular per hit, gated by soft_shadow_factor. Renders at 160x100 (so a full per-pixel pass fits in a single requestAnimationFrame) and CSS-scales to the visible canvas."
                         }
                     }
                 }
@@ -604,106 +584,6 @@ fn game_3d_webgl_tab(state: UseGame3DWebGl, fullscreen: UseGame3DFullscreen) -> 
                     variant: EuvButtonVariant::Primary
                     label: "Enter Fullscreen"
                     onclick: game_3d_on_enter_fullscreen(fullscreen, web_gl_fullscreen)
-                }
-            }
-        }
-    }
-}
-
-/// Renders the RayTrace (software raytracer) demo tab content for the 3D game page.
-///
-/// Renders a 160x100 scene of one mirror sphere, one emissive sphere,
-/// and a ground AABB into the Canvas 2D backing buffer. Each frame
-/// re-traces every pixel using `raytracing::trace_default` so the
-/// mirror reflection bounces off the ground plane (or emissive
-/// sphere) and lands somewhere visibly different from the primary
-/// hit. Mirrors the existing 2D / GL / GPU tab shape: stats bar,
-/// canvas, pause/resume and Enter Fullscreen buttons.
-///
-/// # Returns
-///
-/// - `VirtualNode` - The RayTrace tab virtual DOM tree.
-///
-/// # Arguments
-///
-/// - `UseGame3DRayTrace` - The RayTrace demo state.
-/// - `UseGame3DFullscreen` - The 3D fullscreen overlay state.
-fn game_3d_raytrace_tab(state: UseGame3DRayTrace, fullscreen: UseGame3DFullscreen) -> VirtualNode {
-    let ray_trace_fullscreen: Signal<bool> = fullscreen.get_ray_trace();
-    let loop_started: Signal<bool> = state.get_loop_started();
-    if !loop_started.get() {
-        loop_started.set(true);
-        start_game_3d_raytrace_loop(state);
-    }
-    let on_toggle_pause: Option<Rc<dyn Fn(Event)>> = game_3d_raytrace_on_toggle_pause(state);
-    let fps_display: String = format!("{:.1}", state.get_fps().get());
-    let pause_label: &str = if state.get_running().get() {
-        "Pause"
-    } else {
-        "Resume"
-    };
-    html! {
-        div {
-            div {
-                class: c_game_stats_bar()
-                span {
-                    class: c_game_stats_label()
-                    "FPS: "
-                    span {
-                        class: c_game_stats_fps_value()
-                        fps_display
-                    }
-                }
-                span {
-                    class: c_game_stats_label()
-                    "Scene: 1 mirror + 1 emissive + 1 ground"
-                    span {
-                        class: c_game_stats_count_value()
-                    }
-                }
-            }
-            div {
-                class: if { ray_trace_fullscreen.get() } {
-                    c_game_container_fullscreen()
-                } else {
-                    c_game_canvas_wrapper()
-                }
-                div {
-                    class: c_game_fullscreen_canvas_wrapper()
-                    div {
-                        class: c_game_fullscreen_canvas_letterbox()
-                        canvas {
-                            id: GAME_3D_RAYTRACE_CANVAS_ID
-                            class: if { ray_trace_fullscreen.get() } {
-                                c_game_3d_canvas_fullscreen()
-                            } else {
-                                c_game_3d_canvas()
-                            }
-                        }
-                    }
-                }
-                if { ray_trace_fullscreen.get() } {
-                    div {
-                        class: c_game_fullscreen_toolbar()
-                        euv_button {
-                            variant: EuvButtonVariant::Primary
-                            label: "Exit"
-                            onclick: game_3d_on_exit_fullscreen(ray_trace_fullscreen)
-                        }
-                    }
-                }
-            }
-            div {
-                class: c_button_controls()
-                euv_button {
-                    variant: EuvButtonVariant::Primary
-                    label: pause_label
-                    onclick: on_toggle_pause
-                }
-                euv_button {
-                    variant: EuvButtonVariant::Primary
-                    label: "Enter Fullscreen"
-                    onclick: game_3d_on_enter_fullscreen(fullscreen, ray_trace_fullscreen)
                 }
             }
         }
