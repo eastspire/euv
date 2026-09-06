@@ -4,8 +4,33 @@ pub(crate) const RAYTRACE_CANVAS_ID: &str = "raytrace-canvas";
 /// The CSS selector used to query the RayTrace demo canvas element from the DOM.
 pub(crate) const RAYTRACE_CANVAS_SELECTOR: &str = "#raytrace-canvas";
 
+/// The HTML `id` attribute value for the RayTrace Canvas 2D loading overlay canvas.
+///
+/// Mirrors `RAYTRACE_WEBGL_LOADING_CANVAS_ID` / `RAYTRACE_WEBGPU_LOADING_CANVAS_ID`
+/// so the three RayTrace tabs share the same `c_game_loading_overlay` UX. The
+/// overlay paints a centered "Initializing..." line on top of the raytrace
+/// canvas during the 200-400 ms warmup window the Canvas 2D tab spends
+/// acquiring the SSAA wrapper and tracing its first per-pixel frame.
+pub(crate) const RAYTRACE_LOADING_CANVAS_ID: &str = "raytrace-loading-canvas";
+
+/// The CSS selector for the RayTrace Canvas 2D loading overlay canvas.
+pub(crate) const RAYTRACE_LOADING_CANVAS_SELECTOR: &str = "#raytrace-loading-canvas";
+
 /// The Canvas 2D context type identifier passed to `HTMLCanvasElement::get_context`.
 pub(crate) const RAYTRACE_CONTEXT_TYPE: &str = "2d";
+
+/// Minimum visible duration in milliseconds for the RayTrace Canvas 2D
+/// tab's loading overlay.
+///
+/// Mirrors `GAME_3D_LOADING_MIN_MILLIS` / `raytrace_set_loaded_delayed`
+/// (used by the WebGL / WebGPU tabs) so the user always sees the
+/// "Initializing..." text for at least one paint even when the SSAA
+/// acquire + first warmup ray pass finishes faster than a single
+/// frame. Without this floor the overlay would mount and unmount
+/// inside the same `requestAnimationFrame` tick, which most browsers
+/// collapse into a single paint and the user never sees the loading
+/// state at all.
+pub(crate) const RAYTRACE_CANVAS_2D_LOADING_MIN_MILLIS: i32 = 400;
 
 /// Logical width of the RayTrace page's offscreen render buffer at full
 /// render scale.

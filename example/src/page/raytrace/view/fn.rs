@@ -228,6 +228,12 @@ fn raytrace_canvas_tab(
                             ontouchend: on_touch_end.clone()
                             ontouchcancel: on_touch_end.clone()
                         }
+                        if { !state.get_loaded().get() } {
+                            canvas {
+                                id: RAYTRACE_LOADING_CANVAS_ID
+                                class: c_game_loading_overlay()
+                            }
+                        }
                     }
                 }
                 if { canvas_2d_fullscreen.get() } {
