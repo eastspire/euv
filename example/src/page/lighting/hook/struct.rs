@@ -28,6 +28,12 @@ pub(crate) struct UseLighting {
     /// Whether the lighting loop is currently running.
     #[get(type(copy))]
     pub(crate) running: Signal<bool>,
+    /// Whether the Canvas 2D renderer has finished initializing (success or failure).
+    #[get(type(copy))]
+    pub(crate) loaded: Signal<bool>,
+    /// Whether the Canvas 2D renderer is active and rendering.
+    #[get(type(copy))]
+    pub(crate) active: Signal<bool>,
     /// Whether the lighting loop has been kicked off in this component tree.
     #[get(type(copy))]
     pub(crate) loop_started: Signal<bool>,
@@ -35,6 +41,15 @@ pub(crate) struct UseLighting {
     /// 2.0 = 640x480 super-sampled).
     #[get(type(copy))]
     pub(crate) render_scale: Signal<f64>,
+    /// The most recent init error code as a stable string.
+    ///
+    /// Mirrors the WebGL / WebGPU tabs' `init_error_code` signal so all
+    /// three Lighting tabs share the same status-banner code path.
+    /// The empty string means "no error" (i.e. init has not started or
+    /// succeeded). Storing a stable code rather than the full error
+    /// type keeps this state `Copy`.
+    #[get(type(copy))]
+    pub(crate) init_error_code: Signal<&'static str>,
 }
 
 /// Reactive state for the Lighting WebGL backend tab.

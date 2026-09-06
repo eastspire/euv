@@ -132,6 +132,16 @@ fn lighting_canvas_tab(fullscreen: UseLightingFullscreen) -> VirtualNode {
     let on_toggle_pause: Option<Rc<dyn Fn(Event)>> = lighting_on_toggle_pause(state.get_running());
     let fps_display: String = format!("{:.1}", state.get_fps().get());
     let scale_display: String = format!("{:.0}%", state.get_render_scale().get() * 100.0);
+    let loaded: bool = state.get_loaded().get();
+    let active: bool = state.get_active().get();
+    // Read the init error code even though `lighting_canvas_status_text`
+    // does not consume it (the Canvas 2D tab has no async init that can
+    // fail), so the signal is wired through and the three Lighting tabs
+    // stay symmetric with each other. If a future Canvas 2D init step
+    // becomes fallible, `lighting_canvas_status_text` can fold the code
+    // in without any view-side changes.
+    let _init_error_code: &str = state.get_init_error_code().get();
+    let status_text: &str = lighting_canvas_status_text(active);
     let pause_label: &str = if state.get_running().get() {
         "Pause"
     } else {
@@ -161,6 +171,14 @@ fn lighting_canvas_tab(fullscreen: UseLightingFullscreen) -> VirtualNode {
                         scale_display
                     }
                 }
+                span {
+                    class: c_game_stats_label()
+                    "Status: "
+                    span {
+                        class: c_game_stats_total_value()
+                        status_text
+                    }
+                }
             }
             div {
                 class: if { canvas_2d_fullscreen.get() } {
@@ -178,6 +196,12 @@ fn lighting_canvas_tab(fullscreen: UseLightingFullscreen) -> VirtualNode {
                                 c_raytrace_canvas_fullscreen()
                             } else {
                                 c_game_3d_canvas()
+                            }
+                        }
+                        if { !loaded } {
+                            canvas {
+                                id: LIGHTING_LOADING_CANVAS_ID
+                                class: c_game_loading_overlay()
                             }
                         }
                     }
@@ -208,6 +232,24 @@ fn lighting_canvas_tab(fullscreen: UseLightingFullscreen) -> VirtualNode {
             }
         }
     }
+}
+
+/// Maps the Canvas 2D init state to the banner text shown next to "Status: ".
+///
+/// The Canvas 2D tab has no asynchronous init that can fail (the 2D
+/// context acquire is synchronous in the first frame), so unlike the
+/// WebGPU banner this does not need a full capability decision tree:
+/// the only two states are "warmup" and "live".
+///
+/// # Arguments
+///
+/// - `bool` - Whether the renderer is active.
+///
+/// # Returns
+///
+/// - `&'static str` - The banner text.
+fn lighting_canvas_status_text(active: bool) -> &'static str {
+    if active { "Canvas 2D Active" } else { "Initializing..." }
 }
 
 /// Maps the WebGL init state plus the engine's stable error code to the

@@ -222,6 +222,16 @@ const vec3 MIRROR_CENTER = vec3(0.0, 0.4, 0.0);
 const float MIRROR_RADIUS = 0.9;
 const vec3 EMISSIVE_CENTER = vec3(1.6, 0.6, -1.4);
 const float EMISSIVE_RADIUS = 0.45;
+// Sun sphere: positioned at the OPPOSITE direction of the directional
+// sun at yaw=0 (`raytrace_sun_direction(0.0)` = `vec3(-1, -0.5, 0)`
+// normalized = `vec3(-0.894, -0.447, 0)`), 8 units out from origin, so
+// the camera always sees the directional light source as a tangible
+// object. The position is intentionally static — the sun direction
+// rotates with yaw, but pinning the sphere at the yaw=0 position keeps
+// it in view as the user orbits and prevents the bouncing reflections
+// from losing their anchor.
+const vec3 SUN_CENTER = vec3(7.155, 3.578, 0.0);
+const float SUN_RADIUS = 0.5;
 
 vec3 material_albedo(int index) {
     if (index == 0) { return vec3(0.30, 0.32, 0.36); }
@@ -243,6 +253,7 @@ float material_shininess(int index) {
 
 vec3 material_emissive(int index) {
     if (index == 2) { return vec3(1.0, 0.45, 0.10); }
+    if (index == 3) { return vec3(1.00, 0.95, 0.85); }
     return vec3(0.0, 0.0, 0.0);
 }
 
@@ -291,9 +302,10 @@ float aabb_t(vec3 origin, vec3 dir, vec3 bmin, vec3 bmax, out vec3 normal) {
     return t_near;
 }
 
-// Mirrors engine `closest_hit_indexed` over the three scene occluders:
-// 0 = ground AABB, 1 = mirror sphere, 2 = emissive sphere. Returns -1
-// on miss. Ties keep the earliest occluder, matching the engine.
+// Mirrors engine `closest_hit_indexed` over the four scene occluders:
+// 0 = ground AABB, 1 = mirror sphere, 2 = emissive sphere, 3 = sun
+// sphere. Returns -1 on miss. Ties keep the earliest occluder,
+// matching the engine.
 int closest_hit_index(
     vec3 origin,
     vec3 dir,
@@ -325,6 +337,13 @@ int closest_hit_index(
     t = sphere_t(origin, dir, EMISSIVE_CENTER, EMISSIVE_RADIUS, candidate_normal);
     if (t >= t_min && t <= t_max && (best_index < 0 || t < best_t)) {
         best_index = 2;
+        best_t = t;
+        best_pos = origin + dir * t;
+        best_normal = candidate_normal;
+    }
+    t = sphere_t(origin, dir, SUN_CENTER, SUN_RADIUS, candidate_normal);
+    if (t >= t_min && t <= t_max && (best_index < 0 || t < best_t)) {
+        best_index = 3;
         best_t = t;
         best_pos = origin + dir * t;
         best_normal = candidate_normal;
@@ -453,6 +472,16 @@ const MIRROR_CENTER = vec3<f32>(0.0, 0.4, 0.0);
 const MIRROR_RADIUS: f32 = 0.9;
 const EMISSIVE_CENTER = vec3<f32>(1.6, 0.6, -1.4);
 const EMISSIVE_RADIUS: f32 = 0.45;
+// Sun sphere: positioned at the OPPOSITE direction of the directional
+// sun at yaw=0 (`raytrace_sun_direction(0.0)` = `vec3(-1, -0.5, 0)`
+// normalized = `vec3(-0.894, -0.447, 0)`), 8 units out from origin, so
+// the camera always sees the directional light source as a tangible
+// object. The position is intentionally static — the sun direction
+// rotates with yaw, but pinning the sphere at the yaw=0 position keeps
+// it in view as the user orbits and prevents the bouncing reflections
+// from losing their anchor.
+const SUN_CENTER = vec3<f32>(7.155, 3.578, 0.0);
+const SUN_RADIUS: f32 = 0.5;
 
 struct HitResult {
     t: f32,
@@ -481,6 +510,7 @@ fn material_shininess(index: i32) -> f32 {
 
 fn material_emissive(index: i32) -> vec3<f32> {
     if index == 2 { return vec3<f32>(1.0, 0.45, 0.10); }
+    if index == 3 { return vec3<f32>(1.00, 0.95, 0.85); }
     return vec3<f32>(0.0, 0.0, 0.0);
 }
 
@@ -529,9 +559,10 @@ fn aabb_t(origin: vec3<f32>, dir: vec3<f32>, bmin: vec3<f32>, bmax: vec3<f32>, n
     return t_near;
 }
 
-// Mirrors engine `closest_hit_indexed` over the three scene occluders:
-// 0 = ground AABB, 1 = mirror sphere, 2 = emissive sphere. `index` is
-// -1 on miss. Ties keep the earliest occluder, matching the engine.
+// Mirrors engine `closest_hit_indexed` over the four scene occluders:
+// 0 = ground AABB, 1 = mirror sphere, 2 = emissive sphere, 3 = sun
+// sphere. `index` is -1 on miss. Ties keep the earliest occluder,
+// matching the engine.
 fn closest_hit_index(origin: vec3<f32>, dir: vec3<f32>) -> HitResult {
     var best: HitResult;
     best.t = 0.0;
@@ -556,6 +587,13 @@ fn closest_hit_index(origin: vec3<f32>, dir: vec3<f32>) -> HitResult {
     t = sphere_t(origin, dir, EMISSIVE_CENTER, EMISSIVE_RADIUS, &candidate_normal);
     if t >= T_MIN && t <= T_MAX && (best.index < 0 || t < best.t) {
         best.index = 2;
+        best.t = t;
+        best.position = origin + dir * t;
+        best.normal = candidate_normal;
+    }
+    t = sphere_t(origin, dir, SUN_CENTER, SUN_RADIUS, &candidate_normal);
+    if t >= T_MIN && t <= T_MAX && (best.index < 0 || t < best.t) {
+        best.index = 3;
         best.t = t;
         best.position = origin + dir * t;
         best.normal = candidate_normal;
