@@ -92,6 +92,26 @@ class! {
         touch-action: "none";
     }
 
+    pub c_raytrace_canvas_fullscreen {
+        // RayTrace and Lighting are software-rendered 2D canvases with
+        // a fixed 4:3 backing buffer (320x240). Their backing buffer
+        // is NOT resized on fullscreen enter (re-tracing 1248x750
+        // pixels per frame is not viable in WASM), so the CSS box
+        // must NOT stretch the canvas element to the wrapper - that
+        // would deform every sphere into a 1.45:1 ellipse on a 1280x800
+        // viewport. `object-fit: contain` makes the browser uniformly
+        // scale the 4:3 backing buffer to the largest 4:3 fit inside
+        // the wrapper, painting letterbox bars where the wrapper
+        // extends beyond 4:3.
+        width: "100%";
+        height: "100%";
+        cursor: "grab";
+        display: "block";
+        background: "#000000";
+        touch-action: "none";
+        object-fit: "contain";
+    }
+
     pub c_game_2d_canvas {
         width: "100%";
         height: "100%";
