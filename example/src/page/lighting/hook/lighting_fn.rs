@@ -218,27 +218,49 @@ fn render_lighting_sphere(
 ) {
     let r: f64 = sphere.radius;
     let r2: f64 = r * r;
-    let x_start: i32 = (sphere.cx - r).floor() as i32;
-    let x_end: i32 = (sphere.cx + r).ceil() as i32;
-    let y_start: i32 = (sphere.cy - r).floor() as i32;
-    let y_end: i32 = (sphere.cy + r).ceil() as i32;
+    let x_start: i32 = (sphere.cx - r - 1.0).floor() as i32;
+    let x_end: i32 = (sphere.cx + r + 1.0).ceil() as i32;
+    let y_start: i32 = (sphere.cy - r - 1.0).floor() as i32;
+    let y_end: i32 = (sphere.cy + r + 1.0).ceil() as i32;
+    let sub_offsets: [(f64, f64); 4] = [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)];
     for y in y_start..=y_end {
         for x in x_start..=x_end {
-            let dx: f64 = x as f64 - sphere.cx;
-            let dy: f64 = y as f64 - sphere.cy;
-            let d2: f64 = dx * dx + dy * dy;
-            if d2 > r2 {
+            let mut inside_count: u32 = 0;
+            let mut cr_sum: f64 = 0.0;
+            let mut cg_sum: f64 = 0.0;
+            let mut cb_sum: f64 = 0.0;
+            for (dx_off, dy_off) in sub_offsets {
+                let sx: f64 = x as f64 + dx_off;
+                let sy: f64 = y as f64 + dy_off;
+                let dx: f64 = sx - sphere.cx;
+                let dy: f64 = sy - sphere.cy;
+                let d2: f64 = dx * dx + dy * dy;
+                if d2 > r2 {
+                    continue;
+                }
+                inside_count += 1;
+                let dz: f64 = (r2 - d2).max(0.0).sqrt();
+                let nx: f64 = dx / r;
+                let ny: f64 = dy / r;
+                let nz: f64 = dz / r;
+                let normal: Vector3D = Vector3D::new(nx, ny, nz);
+                let position: Vector3D = Vector3D::new(sx, sy, dz / r);
+                let occluders: Vec<(Vector3D, f64)> = Vec::new();
+                let color: Vector3D = lights.shade(position, normal, &sphere.material, &occluders);
+                cr_sum += color.get_x();
+                cg_sum += color.get_y();
+                cb_sum += color.get_z();
+            }
+            if inside_count == 0 {
                 continue;
             }
-            let dz: f64 = (r2 - d2).max(0.0).sqrt();
-            let nx: f64 = dx / r;
-            let ny: f64 = dy / r;
-            let nz: f64 = dz / r;
-            let normal: Vector3D = Vector3D::new(nx, ny, nz);
-            let position: Vector3D = Vector3D::new(sphere.cx, sphere.cy, dz / r);
-            let occluders: Vec<(Vector3D, f64)> = Vec::new();
-            let color: Vector3D = lights.shade(position, normal, &sphere.material, &occluders);
-            apply_pixel_style(context, color.get_x(), color.get_y(), color.get_z());
+            let inv_count: f64 = 1.0 / f64::from(inside_count);
+            apply_pixel_style(
+                context,
+                cr_sum * inv_count,
+                cg_sum * inv_count,
+                cb_sum * inv_count,
+            );
             context.fill_rect(x as f64, y as f64, 1.0, 1.0);
         }
     }
