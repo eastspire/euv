@@ -91,12 +91,12 @@ pub(crate) struct UseGame2DWebGl {
 
 /// Reactive state for the 2D game fullscreen overlay.
 ///
-/// Each rendering tab (Canvas 2D / WebGL / WebGPU / Lighting) keeps an
-/// independent `fullscreen` signal because the canvas DOM, the render
-/// loop, and the physics / GPU device are all tab-specific. The four
-/// signals are stacked into a single `UseGame2DFullscreen` so the
-/// page-level `popstate` guard can be registered once and dispatch
-/// against whichever tab is currently in fullscreen.
+/// Each rendering tab (Canvas 2D / WebGL / WebGPU) keeps an independent
+/// `fullscreen` signal because the canvas DOM, the render loop, and the
+/// physics / GPU device are all tab-specific. The three signals are
+/// stacked into a single `UseGame2DFullscreen` so the page-level
+/// `popstate` guard can be registered once and dispatch against
+/// whichever tab is currently in fullscreen.
 #[derive(Clone, Copy, Data, Debug, Default, PartialEq)]
 pub(crate) struct UseGame2DFullscreen {
     /// Whether the Canvas 2D tab is currently in landscape fullscreen.
@@ -108,8 +108,4 @@ pub(crate) struct UseGame2DFullscreen {
     /// Whether the WebGPU tab is currently in landscape fullscreen.
     #[get(type(copy))]
     pub(crate) web_gpu: Signal<bool>,
-    /// Whether the Lighting (CPU Phong) tab is currently in landscape
-    /// fullscreen.
-    #[get(type(copy))]
-    pub(crate) lighting: Signal<bool>,
 }

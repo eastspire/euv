@@ -26,6 +26,7 @@ pub(crate) const NAV_ITEMS: &[(&str, &str, &str)] = &[
     ("🌍", "i18n", "/hooks-i18n"),
     ("💚", "KeepAlive", "/keep-alive"),
     ("♻️", "Lifecycle", "/lifecycle"),
+    ("💡", "Lighting", "/lighting"),
     ("📝", "List", "/list"),
     ("💬", "Modal", "/modal"),
     ("👁️", "Observer", "/observer"),

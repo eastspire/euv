@@ -83,6 +83,9 @@ pub(crate) fn page_router(node: VirtualNode<PageRouterProps>) -> VirtualNode {
                 "/lifecycle" => {
                     page_lifecycle {}
                 }
+                "/lighting" => {
+                    page_lighting {}
+                }
                 "/list" => {
                     page_list {}
                 }
