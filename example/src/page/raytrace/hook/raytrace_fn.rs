@@ -264,16 +264,29 @@ fn render_raytrace_frame(
     context.clear_rect(0.0, 0.0, width, height);
     let width_i32: i32 = width as i32;
     let height_i32: i32 = height as i32;
+    let inv_width: f64 = 1.0 / width;
+    let inv_height: f64 = 1.0 / height;
+    let sub_offsets: [(f64, f64); 4] = [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)];
     for y in 0..height_i32 {
         for x in 0..width_i32 {
-            let ndc_x: f64 = ((x as f64 + 0.5) / width) * 2.0 - 1.0;
-            let ndc_y: f64 = 1.0 - ((y as f64 + 0.5) / height) * 2.0;
-            let dir: Vector3D =
-                (forward.scaled(focal) + right.scaled(ndc_x * aspect) + up_true.scaled(ndc_y))
-                    .normalized();
-            let ray: Ray = Ray::new(eye, dir);
-            let color: Vector3D = trace_default(ray, occluders, lights);
-            write_pixel(context, x, y, color.get_x(), color.get_y(), color.get_z());
+            let mut acc_r: f64 = 0.0;
+            let mut acc_g: f64 = 0.0;
+            let mut acc_b: f64 = 0.0;
+            for (dx_off, dy_off) in sub_offsets {
+                let px: f64 = x as f64 + dx_off;
+                let py: f64 = y as f64 + dy_off;
+                let ndc_x: f64 = (px * inv_width) * 2.0 - 1.0;
+                let ndc_y: f64 = 1.0 - (py * inv_height) * 2.0;
+                let dir: Vector3D =
+                    (forward.scaled(focal) + right.scaled(ndc_x * aspect) + up_true.scaled(ndc_y))
+                        .normalized();
+                let ray: Ray = Ray::new(eye, dir);
+                let color: Vector3D = trace_default(ray, occluders, lights);
+                acc_r += color.get_x();
+                acc_g += color.get_y();
+                acc_b += color.get_z();
+            }
+            write_pixel(context, x, y, acc_r * 0.25, acc_g * 0.25, acc_b * 0.25);
         }
     }
 }
