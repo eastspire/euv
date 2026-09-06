@@ -7,8 +7,8 @@ use super::*;
 /// using impulse-based physics. The game loop runs at a fixed 60 Hz
 /// timestep with interpolation via `requestAnimationFrame`.
 ///
-/// A tab bar allows switching between the Canvas 2D backend and the
-/// WebGPU backend for comparison.
+/// A tab bar allows switching between the Canvas 2D, WebGL, and
+/// WebGPU backends for comparison.
 ///
 /// # Returns
 ///
@@ -25,7 +25,7 @@ pub(crate) fn page_game_2d(node: VirtualNode<PageGame2DProps>) -> VirtualNode {
             euv_header {
                 icon: "🎮"
                 title: "2D Game Engine"
-                subtitle: "A bouncing balls physics demo powered by euv-engine. Click on the canvas to spawn balls. Each ball has gravity, wall bouncing with restitution, and impulse-based ball-to-ball collision. Switch tabs to compare Canvas 2D and WebGPU rendering backends. Switch to the Lighting tab to see CPU Phong shading over a 2D scene with directional and point lights."
+                subtitle: "A bouncing balls physics demo powered by euv-engine. Click on the canvas to spawn balls. Each ball has gravity, wall bouncing with restitution, and impulse-based ball-to-ball collision. Switch tabs to compare Canvas 2D, WebGL, and WebGPU rendering backends."
             }
             euv_card {
                 title: "2D Rendering Demo"
@@ -58,15 +58,6 @@ pub(crate) fn page_game_2d(node: VirtualNode<PageGame2DProps>) -> VirtualNode {
                         onclick: game_2d_on_tab_select(tab, Game2DTab::WebGpu, fullscreen)
                         "GPU"
                     }
-                    div {
-                        class: if { tab.get() == Game2DTab::Lighting } {
-                            c_tab_item_active()
-                        } else {
-                            c_tab_item_inactive()
-                        }
-                        onclick: game_2d_on_tab_select(tab, Game2DTab::Lighting, fullscreen)
-                        "Lit"
-                    }
                 }
                 match { tab } {
                     Game2DTab::Canvas2D => {
@@ -82,11 +73,6 @@ pub(crate) fn page_game_2d(node: VirtualNode<PageGame2DProps>) -> VirtualNode {
                     Game2DTab::WebGpu => {
                         div {
                             game_2d_webgpu_tab(use_game_2d_webgpu_state(), fullscreen)
-                        }
-                    }
-                    Game2DTab::Lighting => {
-                        div {
-                            game_2d_lighting_tab(use_game_2d_lighting_state(), fullscreen)
                         }
                     }
                 }
@@ -110,12 +96,6 @@ pub(crate) fn page_game_2d(node: VirtualNode<PageGame2DProps>) -> VirtualNode {
                         p {
                             class: c_game_description()
                             "This demo uses euv-engine's WebGlRenderer to acquire a WebGL 2 context, compile a GLSL ES 3.00 program, and render the same bouncing balls scene as the Canvas 2D tab: every ball is drawn as a shader-generated quad with per-ball position, radius, and color uploaded to vec4 uniform arrays each frame. Click or tap to spawn balls; pause and clear work exactly like Canvas 2D. Works in every modern browser with WebGL 2 support."
-                        }
-                    }
-                    Game2DTab::Lighting => {
-                        p {
-                            class: c_game_description()
-                            "This demo uses euv-engine's lighting module to drive a per-pixel Phong shading pass directly on the Canvas 2D backing buffer: every sphere is rendered as a CPU pixel loop that reconstructs the surface normal from the screen-space position and feeds it to LightingUniforms::shade together with one directional sun and one point lamp. The ground line is shaded with the same pipeline (a fixed up-pointing normal) so the directional sun's side-light is clearly visible. No shaders, no GPU pipeline — just Rust math running through compute_lambert / compute_phong per pixel."
                         }
                     }
                 }
@@ -601,103 +581,6 @@ fn game_2d_webgl_tab(state: UseGame2DWebGl, fullscreen: UseGame2DFullscreen) -> 
                     variant: EuvButtonVariant::Primary
                     label: "Enter Fullscreen"
                     onclick: game_2d_on_enter_fullscreen(fullscreen, web_gl_fullscreen)
-                }
-            }
-        }
-    }
-}
-
-/// Renders the Lighting (CPU Phong) demo tab content for the 2D game page.
-///
-/// Renders a static scene (five Phong spheres + a ground line) into a
-/// 256x192 offscreen buffer using per-pixel shading. Mirrors the
-/// existing Canvas 2D / WebGL / WebGPU tab shape: stats bar, canvas,
-/// pause/resume and Enter Fullscreen buttons.
-///
-/// # Returns
-///
-/// - `VirtualNode` - The Lighting tab virtual DOM tree.
-///
-/// # Arguments
-///
-/// - `UseGame2DLighting` - The Lighting demo state.
-/// - `UseGame2DFullscreen` - The 2D fullscreen overlay state.
-fn game_2d_lighting_tab(state: UseGame2DLighting, fullscreen: UseGame2DFullscreen) -> VirtualNode {
-    let lighting_fullscreen: Signal<bool> = fullscreen.get_lighting();
-    let loop_started: Signal<bool> = state.get_loop_started();
-    if !loop_started.get() {
-        loop_started.set(true);
-        start_game_2d_lighting_loop(state);
-    }
-    let on_toggle_pause: Option<Rc<dyn Fn(Event)>> = game_2d_lighting_on_toggle_pause(state);
-    let fps_display: String = format!("{:.1}", state.get_fps().get());
-    let pause_label: &str = if state.get_running().get() {
-        "Pause"
-    } else {
-        "Resume"
-    };
-    html! {
-        div {
-            div {
-                class: c_game_stats_bar()
-                span {
-                    class: c_game_stats_label()
-                    "FPS: "
-                    span {
-                        class: c_game_stats_fps_value()
-                        fps_display
-                    }
-                }
-                span {
-                    class: c_game_stats_label()
-                    "Lights: 1 directional + 1 point"
-                    span {
-                        class: c_game_stats_count_value()
-                    }
-                }
-            }
-            div {
-                class: if { lighting_fullscreen.get() } {
-                    c_game_container_fullscreen()
-                } else {
-                    c_game_canvas_wrapper()
-                }
-                div {
-                    class: c_game_fullscreen_canvas_wrapper()
-                    div {
-                        class: c_game_fullscreen_canvas_letterbox()
-                        canvas {
-                            id: GAME_2D_LIGHTING_CANVAS_ID
-                            class: if { lighting_fullscreen.get() } {
-                                c_game_2d_canvas_fullscreen()
-                            } else {
-                                c_game_2d_canvas()
-                            }
-                        }
-                    }
-                }
-                if { lighting_fullscreen.get() } {
-                    div {
-                        class: c_game_fullscreen_toolbar()
-                        euv_button {
-                            variant: EuvButtonVariant::Primary
-                            label: "Exit"
-                            onclick: game_2d_on_exit_fullscreen(lighting_fullscreen)
-                        }
-                    }
-                }
-            }
-            div {
-                class: c_button_controls()
-                euv_button {
-                    variant: EuvButtonVariant::Primary
-                    label: pause_label
-                    onclick: on_toggle_pause
-                }
-                euv_button {
-                    variant: EuvButtonVariant::Primary
-                    label: "Enter Fullscreen"
-                    onclick: game_2d_on_enter_fullscreen(fullscreen, lighting_fullscreen)
                 }
             }
         }
