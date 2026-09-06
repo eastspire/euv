@@ -182,12 +182,14 @@ fn acquire_raytrace_ssaa_canvas() -> Option<(HtmlCanvasElement, SsaaCanvas)> {
 
 /// Builds the static raytracing scene used by the RayTrace demo.
 ///
-/// Three occluders: a mirror sphere in the centre (Phong specular
+/// Four occluders: a mirror sphere in the centre (Phong specular
 /// material drives the reflection), an emissive sphere in the back
-/// (acts as the only light source visible to bounced rays), and a
-/// ground AABB below the spheres. Returns the occluder list together
-/// with the eye position (kept constant so specular highlights stay
-/// stable as the camera orbits).
+/// (acts as the only secondary light source visible to bounced rays),
+/// a sun sphere positioned in the direction OPPOSITE to the directional
+/// sun at yaw=0 so the user can see the light source as a tangible
+/// glowing object on screen, and a ground AABB below the spheres.
+/// Returns the occluder list together with the eye position (kept
+/// constant so specular highlights stay stable as the camera orbits).
 ///
 /// # Returns
 ///
@@ -202,7 +204,17 @@ fn build_raytrace_scene() -> (Vec<Occluder>, Vector3D) {
     let emissive_material: Material = Material::emissive(Vector3D::new(1.0, 0.45, 0.10));
     let emissive: Occluder =
         Occluder::sphere(Vector3D::new(1.6, 0.6, -1.4), 0.45, emissive_material);
-    let occluders: Vec<Occluder> = vec![ground, mirror, emissive];
+    // Sun sphere: positioned at the OPPOSITE direction of the
+    // directional sun at yaw=0 (`raytrace_sun_direction(0.0)`), 8 units
+    // out from origin, so the camera always sees the light source as
+    // a tangible object. The position is intentionally static — the
+    // direction rotates with yaw, but pinning the sun sphere at the
+    // yaw=0 position keeps it in view as the user orbits and prevents
+    // the bouncing reflections from losing their anchor.
+    let sun_material: Material = Material::emissive(Vector3D::new(1.00, 0.95, 0.85));
+    let sun: Occluder =
+        Occluder::sphere(raytrace_sun_direction(0.0) * -8.0, 0.5, sun_material);
+    let occluders: Vec<Occluder> = vec![ground, mirror, emissive, sun];
     let eye: Vector3D = Vector3D::new(0.0, 0.8, 3.5);
     (occluders, eye)
 }

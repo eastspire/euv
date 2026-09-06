@@ -9,8 +9,11 @@ pub(crate) fn use_lighting_state() -> UseLighting {
     UseLighting {
         fps: App::use_signal(|| 0.0),
         running: App::use_signal(|| true),
+        loaded: App::use_signal(|| false),
+        active: App::use_signal(|| false),
         loop_started: App::use_signal(|| false),
         render_scale: App::use_signal(|| 1.0),
+        init_error_code: App::use_signal(|| ""),
     }
 }
 
@@ -426,6 +429,21 @@ pub(crate) fn start_lighting_loop(state: UseLighting) {
     let slow_clone: Rc<Cell<u32>> = slow_frames.clone();
     let fast_clone: Rc<Cell<u32>> = fast_frames.clone();
     let very_fast_clone: Rc<Cell<u32>> = very_fast_frames.clone();
+    // Paint the loading overlay *before* the first frame so the user
+    // sees a centered "Initializing..." line during the Canvas 2D
+    // context acquire + first warmup frame. The 200-400 ms window is
+    // short enough that the overlay usually disappears in a single
+    // frame, but synchronous WASM module init can delay it further on
+    // slow devices, and without this paint the canvas stays blank /
+    // half-rendered for that entire window.
+    let Some(loading_window): Option<Window> = window() else { return; };
+    let loading_closure: Closure<dyn FnMut()> = Closure::wrap(Box::new(move || {
+        draw_game_3d_loading(LIGHTING_LOADING_CANVAS_SELECTOR, LIGHTING_CANVAS_SELECTOR);
+    }));
+    let loading_callback: Function = loading_closure.as_ref().unchecked_ref::<Function>().clone();
+    loading_closure.forget();
+    let _ =
+        loading_window.set_timeout_with_callback_and_timeout_and_arguments_0(&loading_callback, 0);
     let raf_closure: Closure<dyn FnMut()> = Closure::wrap(Box::new(move || {
         if lighting_canvas_detached(LIGHTING_CANVAS_SELECTOR) {
             return;
@@ -529,6 +547,19 @@ pub(crate) fn start_lighting_loop(state: UseLighting) {
                     fast_clone.set(0);
                     very_fast_clone.set(0);
                     state.get_render_scale().set(LIGHTING_RENDER_SCALES[next]);
+                }
+                // Flip the active / loaded flags on the first successful
+                // frame so the loading overlay unloads and the
+                // `Status: ...` banner reports a live renderer. The
+                // `loaded` set is delayed by
+                // `GAME_3D_LOADING_MIN_MILLIS` so the overlay stays
+                // painted for a minimum visible duration even when the
+                // Canvas 2D acquire + first warmup frame finishes in
+                // less than a frame budget — the same UX the WebGL /
+                // WebGPU tabs use via `lighting_set_loaded_delayed`.
+                if !state.get_active().get() {
+                    state.get_active().set(true);
+                    lighting_set_loaded_delayed(state.get_loaded(), GAME_3D_LOADING_MIN_MILLIS);
                 }
             }
         }
