@@ -31,7 +31,8 @@ pub(crate) struct UseLighting {
     /// Whether the lighting loop has been kicked off in this component tree.
     #[get(type(copy))]
     pub(crate) loop_started: Signal<bool>,
-    /// The current adaptive internal render scale (1.0 = full 320x240).
+    /// The current adaptive internal render scale (1.0 = full 320x240,
+    /// 2.0 = 640x480 super-sampled).
     #[get(type(copy))]
     pub(crate) render_scale: Signal<f64>,
 }

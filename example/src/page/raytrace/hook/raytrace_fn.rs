@@ -443,7 +443,10 @@ pub(crate) fn start_raytrace_loop(state: UseRayTrace, angles: RayTraceCameraAngl
     let canvas_cache: Rc<RefCell<Option<(HtmlCanvasElement, CanvasRenderingContext2d)>>> =
         Rc::new(RefCell::new(None));
     let framebuffer: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    let scale_index: Rc<Cell<usize>> = Rc::new(Cell::new(0));
+    // Start at ladder index 2 (scale 1.0): weak clients never start
+    // heavy, and the controller climbs toward 2.0 only after sustained
+    // fast frames prove the budget allows it.
+    let scale_index: Rc<Cell<usize>> = Rc::new(Cell::new(2));
     let ema_millis: Rc<Cell<f64>> = Rc::new(Cell::new(0.0));
     let slow_frames: Rc<Cell<u32>> = Rc::new(Cell::new(0));
     let fast_frames: Rc<Cell<u32>> = Rc::new(Cell::new(0));

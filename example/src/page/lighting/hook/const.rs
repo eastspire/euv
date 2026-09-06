@@ -38,9 +38,11 @@ pub(crate) const LIGHTING_EYE_Z: f64 = 2.0;
 /// The backing buffer is sized `320 * scale` by `240 * scale`, so every
 /// step keeps the exact 4:3 aspect ratio required by the
 /// `c_raytrace_canvas_fullscreen` `object-fit: contain` letterbox
-/// contract. All steps produce integer dimensions: 320x240, 240x180,
-/// 160x120, 120x90, 80x60.
-pub(crate) const LIGHTING_RENDER_SCALES: [f64; 5] = [1.0, 0.75, 0.5, 0.375, 0.25];
+/// contract. All steps produce integer dimensions: 640x480, 480x360,
+/// 320x240, 240x180, 160x120, 120x90, 80x60. The loop starts at index
+/// 2 (scale 1.0) so weak clients never start heavy; the controller
+/// climbs toward 2.0 only when the frame-time budget allows.
+pub(crate) const LIGHTING_RENDER_SCALES: [f64; 7] = [2.0, 1.5, 1.0, 0.75, 0.5, 0.375, 0.25];
 
 /// Exponential-moving-average blend factor for the per-frame CPU render
 /// time measurement that drives adaptive resolution.
@@ -114,12 +116,17 @@ void main() {
 /// 320x240 logical space, lit by one directional sun and one point
 /// lamp. The per-pixel math mirrors `LightingUniforms::shade` term for
 /// term (including the directional-light-no-shadow and
-/// eye-distance-falloff quirks), averages the same 2x2 sub-samples per
-/// logical pixel, and applies the same `1/2.2` gamma curve. The scene
-/// is letterboxed into the canvas with a uniform scale (never
-/// stretched); out-of-scene fragments show the canvas background color
-/// uploaded in `u_params[1]`, matching the transparent-cleared Canvas
-/// 2D tab.
+/// eye-distance-falloff quirks) and applies the same `1/2.2` gamma
+/// curve. Antialiasing is a physical-resolution 2x2 SSAA: each fragment
+/// takes four sub-samples at physical-pixel offsets, converts each one
+/// to logical scene coordinates through the letterbox transform, and
+/// evaluates the scene analytically at that exact point (painter's
+/// order per sub-sample: background -> ground band -> spheres
+/// back-to-front), so edges stay smooth at any canvas backing
+/// resolution. The scene is letterboxed into the canvas with a uniform
+/// scale (never stretched); out-of-scene sub-samples show the canvas
+/// background color uploaded in `u_params[1]`, matching the
+/// transparent-cleared Canvas 2D tab.
 pub(crate) const LIGHTING_WEBGL_FRAGMENT_SHADER: &str = r#"#version 300 es
 
 precision highp float;
@@ -224,6 +231,45 @@ vec3 shade(vec3 position, vec3 normal, vec3 albedo, float specular, float shinin
     return color;
 }
 
+// Evaluates the analytic scene at one logical-space point, following
+// the CPU path's painter order exactly: background first, then the
+// ground band, then the spheres back-to-front (index 0..4, each
+// overwriting whatever came before when the point falls inside it).
+vec3 scene_color(vec2 logical, vec3 background) {
+    if (logical.x < 0.0 || logical.x >= SCENE_W || logical.y < 0.0 || logical.y >= SCENE_H) {
+        return background;
+    }
+    vec3 color = background;
+    if (logical.y >= GROUND_Y && logical.y < GROUND_Y + 1.0) {
+        color = shade(
+            vec3(floor(logical.x), GROUND_Y, 0.0),
+            vec3(0.0, -1.0, 0.0),
+            vec3(0.55, 0.55, 0.60),
+            0.15,
+            12.0
+        );
+    }
+    for (int i = 0; i < 5; i++) {
+        vec3 record = sphere_record(i);
+        float radius = record.z;
+        float r2 = radius * radius;
+        vec2 d = logical - record.xy;
+        float d2 = dot(d, d);
+        if (d2 > r2) { continue; }
+        float dz = sqrt(max(r2 - d2, 0.0));
+        vec3 normal = vec3(d.x / radius, d.y / radius, dz / radius);
+        vec3 position = vec3(logical, dz / radius);
+        color = shade(
+            position,
+            normal,
+            sphere_albedo(i),
+            sphere_specular(i),
+            sphere_shininess(i)
+        );
+    }
+    return color;
+}
+
 void main() {
     vec2 resolution = u_params[0].xy;
     vec3 background = u_params[1].rgb;
@@ -233,58 +279,21 @@ void main() {
     vec2 origin_px = (resolution - vec2(SCENE_W, SCENE_H) * viewport_scale) * 0.5;
     // gl_FragCoord is bottom-up; the logical scene is top-down.
     vec2 frag = vec2(gl_FragCoord.x, resolution.y - gl_FragCoord.y);
-    vec2 logical = (frag - origin_px) / viewport_scale;
-    vec3 linear = vec3(0.0);
-    bool lit = false;
-    if (logical.x >= 0.0 && logical.x < SCENE_W && logical.y >= 0.0 && logical.y < SCENE_H) {
-        float lx = floor(logical.x);
-        float ly = floor(logical.y);
-        if (ly >= GROUND_Y && ly < GROUND_Y + 1.0) {
-            linear = shade(
-                vec3(lx, GROUND_Y, 0.0),
-                vec3(0.0, -1.0, 0.0),
-                vec3(0.55, 0.55, 0.60),
-                0.15,
-                12.0
-            );
-            lit = true;
-        }
-        for (int i = 0; i < 5; i++) {
-            vec3 record = sphere_record(i);
-            float radius = record.z;
-            float r2 = radius * radius;
-            vec3 acc = vec3(0.0);
-            int inside = 0;
-            for (int sy = 0; sy < 2; sy++) {
-                for (int sx = 0; sx < 2; sx++) {
-                    float sample_x = lx + 0.25 + float(sx) * 0.5;
-                    float sample_y = ly + 0.25 + float(sy) * 0.5;
-                    vec2 d = vec2(sample_x, sample_y) - record.xy;
-                    float d2 = dot(d, d);
-                    if (d2 > r2) { continue; }
-                    inside += 1;
-                    float dz = sqrt(max(r2 - d2, 0.0));
-                    vec3 normal = vec3(d.x / radius, d.y / radius, dz / radius);
-                    vec3 position = vec3(sample_x, sample_y, dz / radius);
-                    acc += shade(
-                        position,
-                        normal,
-                        sphere_albedo(i),
-                        sphere_specular(i),
-                        sphere_shininess(i)
-                    );
-                }
-            }
-            if (inside > 0) {
-                linear = acc / float(inside);
-                lit = true;
-            }
+    // 2x2 super-sampling at physical fragment resolution: each
+    // sub-sample offset is taken in physical pixels and converted to
+    // logical scene coordinates individually, so edges anti-alias at
+    // the canvas backing resolution on any DPI instead of snapping to
+    // the 320x240 logical grid.
+    vec2 base = floor(frag);
+    vec3 acc = vec3(0.0);
+    for (int sy = 0; sy < 2; sy++) {
+        for (int sx = 0; sx < 2; sx++) {
+            vec2 sample_px = base + vec2(0.25 + float(sx) * 0.5, 0.25 + float(sy) * 0.5);
+            vec2 logical = (sample_px - origin_px) / viewport_scale;
+            acc += scene_color(logical, background);
         }
     }
-    if (!lit) {
-        out_color = vec4(background, 1.0);
-        return;
-    }
+    vec3 linear = acc * 0.25;
     vec3 gamma = pow(clamp(linear, vec3(0.0), vec3(1.0)), vec3(1.0 / 2.2));
     out_color = vec4(gamma, 1.0);
 }
@@ -294,13 +303,15 @@ void main() {
 ///
 /// Mirrors [`LIGHTING_WEBGL_FRAGMENT_SHADER`]: the same analytic 2D
 /// scene (five circles + ground row, sun + point lamp), the same
-/// `LightingUniforms::shade` math, the same 2x2 sub-sample averaging
-/// and `1/2.2` gamma, and the same uniform-scale letterbox into the
-/// canvas. The fullscreen triangle is generated from
-/// `@builtin(vertex_index)` and the per-frame resolution / background
-/// data arrives in a 2-`vec4` uniform buffer at `@group(0)
-/// @binding(0)`. WebGPU fragment positions are top-left origin, so no
-/// y-flip is needed (unlike the WebGL variant).
+/// `LightingUniforms::shade` math, the same physical-resolution 2x2
+/// SSAA (each sub-sample offset is taken in physical pixels and
+/// converted to logical scene coordinates individually) and `1/2.2`
+/// gamma, and the same uniform-scale letterbox into the canvas. The
+/// fullscreen triangle is generated from `@builtin(vertex_index)` and
+/// the per-frame resolution / background data arrives in a 2-`vec4`
+/// uniform buffer at `@group(0) @binding(0)`. WebGPU fragment positions
+/// are top-left origin, so no y-flip is needed (unlike the WebGL
+/// variant).
 pub(crate) const LIGHTING_WEBGPU_SHADER: &str = r#"
 struct SceneUniforms {
     resolution: vec4<f32>,
@@ -405,6 +416,45 @@ fn shade(position: vec3<f32>, normal: vec3<f32>, albedo: vec3<f32>, specular: f3
     return color;
 }
 
+// Evaluates the analytic scene at one logical-space point, following
+// the CPU path's painter order exactly: background first, then the
+// ground band, then the spheres back-to-front (index 0..4, each
+// overwriting whatever came before when the point falls inside it).
+fn scene_color(logical: vec2<f32>, background: vec3<f32>) -> vec3<f32> {
+    if logical.x < 0.0 || logical.x >= SCENE_W || logical.y < 0.0 || logical.y >= SCENE_H {
+        return background;
+    }
+    var color = background;
+    if logical.y >= GROUND_Y && logical.y < GROUND_Y + 1.0 {
+        color = shade(
+            vec3<f32>(floor(logical.x), GROUND_Y, 0.0),
+            vec3<f32>(0.0, -1.0, 0.0),
+            vec3<f32>(0.55, 0.55, 0.60),
+            0.15,
+            12.0,
+        );
+    }
+    for (var i = 0; i < 5; i++) {
+        let record = sphere_record(i);
+        let radius = record.z;
+        let r2 = radius * radius;
+        let d = logical - record.xy;
+        let d2 = dot(d, d);
+        if d2 > r2 { continue; }
+        let dz = sqrt(max(r2 - d2, 0.0));
+        let normal = vec3<f32>(d.x / radius, d.y / radius, dz / radius);
+        let position = vec3<f32>(logical, dz / radius);
+        color = shade(
+            position,
+            normal,
+            sphere_albedo(i),
+            sphere_specular(i),
+            sphere_shininess(i),
+        );
+    }
+    return color;
+}
+
 @vertex
 fn vs_main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
     var positions = array<vec2<f32>, 3>(
@@ -425,57 +475,21 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>) -> @location(0) vec4<f32> {
     // top-down y axis directly.
     let viewport_scale = min(resolution.x / SCENE_W, resolution.y / SCENE_H);
     let origin_px = (resolution - vec2<f32>(SCENE_W, SCENE_H) * viewport_scale) * 0.5;
-    let logical = (frag_pos.xy - origin_px) / viewport_scale;
-    var linear = vec3<f32>(0.0);
-    var lit = false;
-    if logical.x >= 0.0 && logical.x < SCENE_W && logical.y >= 0.0 && logical.y < SCENE_H {
-        let lx = floor(logical.x);
-        let ly = floor(logical.y);
-        if ly >= GROUND_Y && ly < GROUND_Y + 1.0 {
-            linear = shade(
-                vec3<f32>(lx, GROUND_Y, 0.0),
-                vec3<f32>(0.0, -1.0, 0.0),
-                vec3<f32>(0.55, 0.55, 0.60),
-                0.15,
-                12.0,
-            );
-            lit = true;
-        }
-        for (var i = 0; i < 5; i++) {
-            let record = sphere_record(i);
-            let radius = record.z;
-            let r2 = radius * radius;
-            var acc = vec3<f32>(0.0);
-            var inside = 0;
-            for (var sy = 0; sy < 2; sy++) {
-                for (var sx = 0; sx < 2; sx++) {
-                    let sample_x = lx + 0.25 + f32(sx) * 0.5;
-                    let sample_y = ly + 0.25 + f32(sy) * 0.5;
-                    let d = vec2<f32>(sample_x, sample_y) - record.xy;
-                    let d2 = dot(d, d);
-                    if d2 > r2 { continue; }
-                    inside += 1;
-                    let dz = sqrt(max(r2 - d2, 0.0));
-                    let normal = vec3<f32>(d.x / radius, d.y / radius, dz / radius);
-                    let position = vec3<f32>(sample_x, sample_y, dz / radius);
-                    acc += shade(
-                        position,
-                        normal,
-                        sphere_albedo(i),
-                        sphere_specular(i),
-                        sphere_shininess(i),
-                    );
-                }
-            }
-            if inside > 0 {
-                linear = acc / f32(inside);
-                lit = true;
-            }
+    // 2x2 super-sampling at physical fragment resolution: each
+    // sub-sample offset is taken in physical pixels and converted to
+    // logical scene coordinates individually, so edges anti-alias at
+    // the canvas backing resolution on any DPI instead of snapping to
+    // the 320x240 logical grid.
+    let base = floor(frag_pos.xy);
+    var acc = vec3<f32>(0.0);
+    for (var sy = 0; sy < 2; sy++) {
+        for (var sx = 0; sx < 2; sx++) {
+            let sample_px = base + vec2<f32>(0.25 + f32(sx) * 0.5, 0.25 + f32(sy) * 0.5);
+            let logical = (sample_px - origin_px) / viewport_scale;
+            acc += scene_color(logical, background);
         }
     }
-    if !lit {
-        return vec4<f32>(background, 1.0);
-    }
+    let linear = acc * 0.25;
     let gamma = pow(clamp(linear, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(1.0 / 2.2));
     return vec4<f32>(gamma, 1.0);
 }

@@ -76,9 +76,11 @@ pub(crate) const RAYTRACE_LOOP_START_DELAY_MILLIS: i32 = 360;
 /// The backing buffer is sized `320 * scale` by `240 * scale`, so every
 /// step keeps the exact 4:3 aspect ratio required by the
 /// `c_raytrace_canvas_fullscreen` `object-fit: contain` letterbox
-/// contract. All steps produce integer dimensions: 320x240, 240x180,
-/// 160x120, 120x90, 80x60.
-pub(crate) const RAYTRACE_RENDER_SCALES: [f64; 5] = [1.0, 0.75, 0.5, 0.375, 0.25];
+/// contract. All steps produce integer dimensions: 640x480, 480x360,
+/// 320x240, 240x180, 160x120, 120x90, 80x60. The loop starts at index
+/// 2 (scale 1.0) so weak clients never start heavy; the controller
+/// climbs toward 2.0 only when the frame-time budget allows.
+pub(crate) const RAYTRACE_RENDER_SCALES: [f64; 7] = [2.0, 1.5, 1.0, 0.75, 0.5, 0.375, 0.25];
 
 /// Exponential-moving-average blend factor for the per-frame CPU render
 /// time measurement that drives adaptive resolution.
