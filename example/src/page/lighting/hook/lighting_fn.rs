@@ -385,10 +385,12 @@ fn present_lighting_framebuffer(
 /// call. An exponential moving average of the CPU render time drives
 /// the [`LIGHTING_RENDER_SCALES`] adaptive-resolution ladder: sustained
 /// frames above 115% of the 60 FPS budget step the internal resolution
-/// down, sustained frames below 70% step it back up. The FPS counter
-/// uses unclamped wall-clock elapsed time so it reports honest rates;
-/// there is no animation step to clamp for. The `use_cleanup`
-/// cancellation and canvas-detached guard mirror the raytrace pattern.
+/// down one rung, sustained frames below 75% step it back up one rung,
+/// and sustained frames below 45% step it up two rungs at once. The
+/// FPS counter uses unclamped wall-clock elapsed time so it reports
+/// honest rates; there is no animation step to clamp for. The
+/// `use_cleanup` cancellation and canvas-detached guard mirror the
+/// raytrace pattern.
 ///
 /// # Arguments
 ///
@@ -403,13 +405,14 @@ pub(crate) fn start_lighting_loop(state: UseLighting) {
     let canvas_cache: Rc<RefCell<Option<(HtmlCanvasElement, CanvasRenderingContext2d)>>> =
         Rc::new(RefCell::new(None));
     let framebuffer: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
-    // Start at ladder index 2 (scale 1.0): weak clients never start
-    // heavy, and the controller climbs toward 2.0 only after sustained
+    // Start at ladder index 7 (scale 1.0): weak clients never start
+    // heavy, and the controller climbs toward 4.0 only after sustained
     // fast frames prove the budget allows it.
-    let scale_index: Rc<Cell<usize>> = Rc::new(Cell::new(2));
+    let scale_index: Rc<Cell<usize>> = Rc::new(Cell::new(7));
     let ema_millis: Rc<Cell<f64>> = Rc::new(Cell::new(0.0));
     let slow_frames: Rc<Cell<u32>> = Rc::new(Cell::new(0));
     let fast_frames: Rc<Cell<u32>> = Rc::new(Cell::new(0));
+    let very_fast_frames: Rc<Cell<u32>> = Rc::new(Cell::new(0));
     let last_clone: Rc<Cell<f64>> = last_time.clone();
     let frame_clone: Rc<Cell<u32>> = frame_count.clone();
     let fps_clone: Rc<Cell<f64>> = fps_timer.clone();
@@ -422,6 +425,7 @@ pub(crate) fn start_lighting_loop(state: UseLighting) {
     let ema_clone: Rc<Cell<f64>> = ema_millis.clone();
     let slow_clone: Rc<Cell<u32>> = slow_frames.clone();
     let fast_clone: Rc<Cell<u32>> = fast_frames.clone();
+    let very_fast_clone: Rc<Cell<u32>> = very_fast_frames.clone();
     let raf_closure: Closure<dyn FnMut()> = Closure::wrap(Box::new(move || {
         if lighting_canvas_detached(LIGHTING_CANVAS_SELECTOR) {
             return;
@@ -488,12 +492,19 @@ pub(crate) fn start_lighting_loop(state: UseLighting) {
                 if ema > LIGHTING_ADAPT_SLOW_FRAME_MILLIS {
                     slow_clone.set(slow_clone.get() + 1);
                     fast_clone.set(0);
+                    very_fast_clone.set(0);
+                } else if ema < LIGHTING_ADAPT_VERY_FAST_FRAME_MILLIS {
+                    fast_clone.set(fast_clone.get() + 1);
+                    very_fast_clone.set(very_fast_clone.get() + 1);
+                    slow_clone.set(0);
                 } else if ema < LIGHTING_ADAPT_FAST_FRAME_MILLIS {
                     fast_clone.set(fast_clone.get() + 1);
                     slow_clone.set(0);
+                    very_fast_clone.set(0);
                 } else {
                     slow_clone.set(0);
                     fast_clone.set(0);
+                    very_fast_clone.set(0);
                 }
                 let index: usize = scale_clone.get();
                 let mut next: usize = index;
@@ -502,12 +513,21 @@ pub(crate) fn start_lighting_loop(state: UseLighting) {
                 {
                     next = index + 1;
                 } else if fast_clone.get() >= LIGHTING_ADAPT_FAST_FRAMES && index > 0 {
-                    next = index - 1;
+                    // Sustained headroom far below the budget skips a
+                    // rung so strong hardware reaches the sharp 4.0 top
+                    // of the ladder in a handful of steps instead of
+                    // crawling one rung at a time.
+                    next = if very_fast_clone.get() >= LIGHTING_ADAPT_FAST_FRAMES {
+                        index.saturating_sub(2)
+                    } else {
+                        index - 1
+                    };
                 }
                 if next != index {
                     scale_clone.set(next);
                     slow_clone.set(0);
                     fast_clone.set(0);
+                    very_fast_clone.set(0);
                     state.get_render_scale().set(LIGHTING_RENDER_SCALES[next]);
                 }
             }
