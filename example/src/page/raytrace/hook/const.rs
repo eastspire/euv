@@ -76,11 +76,16 @@ pub(crate) const RAYTRACE_LOOP_START_DELAY_MILLIS: i32 = 360;
 /// The backing buffer is sized `320 * scale` by `240 * scale`, so every
 /// step keeps the exact 4:3 aspect ratio required by the
 /// `c_raytrace_canvas_fullscreen` `object-fit: contain` letterbox
-/// contract. All steps produce integer dimensions: 640x480, 480x360,
-/// 320x240, 240x180, 160x120, 120x90, 80x60. The loop starts at index
-/// 2 (scale 1.0) so weak clients never start heavy; the controller
-/// climbs toward 2.0 only when the frame-time budget allows.
-pub(crate) const RAYTRACE_RENDER_SCALES: [f64; 7] = [2.0, 1.5, 1.0, 0.75, 0.5, 0.375, 0.25];
+/// contract. All steps produce integer dimensions: 1280x960, 960x720,
+/// 800x600, 640x480, 560x420, 480x360, 400x300, 320x240, 240x180,
+/// 160x120, 120x90, 80x60. The loop starts at index 7 (scale 1.0) so
+/// weak clients never start heavy; the controller climbs toward 4.0
+/// only when the frame-time budget allows, so the backing buffer can
+/// approach the physical canvas size on strong hardware instead of
+/// relying on the browser's smooth upscale.
+pub(crate) const RAYTRACE_RENDER_SCALES: [f64; 12] = [
+    4.0, 3.0, 2.5, 2.0, 1.75, 1.5, 1.25, 1.0, 0.75, 0.5, 0.375, 0.25,
+];
 
 /// Exponential-moving-average blend factor for the per-frame CPU render
 /// time measurement that drives adaptive resolution.
@@ -91,16 +96,24 @@ pub(crate) const RAYTRACE_ADAPT_EMA_ALPHA: f64 = 0.1;
 pub(crate) const RAYTRACE_ADAPT_SLOW_FRAME_MILLIS: f64 = 16.67 * 1.15;
 
 /// CPU frame time in milliseconds below which the adaptive-resolution
-/// controller steps the render scale up (70% of the 60 FPS budget).
-pub(crate) const RAYTRACE_ADAPT_FAST_FRAME_MILLIS: f64 = 16.67 * 0.7;
+/// controller steps the render scale up one rung (75% of the 60 FPS
+/// budget).
+pub(crate) const RAYTRACE_ADAPT_FAST_FRAME_MILLIS: f64 = 16.67 * 0.75;
+
+/// CPU frame time in milliseconds below which the adaptive-resolution
+/// controller steps the render scale up two rungs at once (45% of the
+/// 60 FPS budget), skipping intermediate rungs when the headroom is
+/// obvious.
+pub(crate) const RAYTRACE_ADAPT_VERY_FAST_FRAME_MILLIS: f64 = 16.67 * 0.45;
 
 /// Number of consecutive slow frames required before stepping the render
 /// scale down one notch.
 pub(crate) const RAYTRACE_ADAPT_SLOW_FRAMES: u32 = 30;
 
 /// Number of consecutive fast frames required before stepping the render
-/// scale up one notch.
-pub(crate) const RAYTRACE_ADAPT_FAST_FRAMES: u32 = 120;
+/// scale up (one notch, or two notches when the frame time also stayed
+/// below [`RAYTRACE_ADAPT_VERY_FAST_FRAME_MILLIS`] for the same span).
+pub(crate) const RAYTRACE_ADAPT_FAST_FRAMES: u32 = 45;
 
 /// The HTML `id` attribute value for the RayTrace WebGL canvas element.
 pub(crate) const RAYTRACE_WEBGL_CANVAS_ID: &str = "raytrace-webgl-canvas";
