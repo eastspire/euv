@@ -96,7 +96,7 @@ pub(crate) fn page_raytrace(node: VirtualNode<PageRaytraceProps>) -> VirtualNode
                             canvas {
                                 id: RAYTRACE_CANVAS_ID
                                 class: if { fullscreen_signal.get() } {
-                                    c_game_3d_canvas_fullscreen()
+                                    c_raytrace_canvas_fullscreen()
                                 } else {
                                     c_game_3d_canvas()
                                 }
