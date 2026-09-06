@@ -12,6 +12,19 @@ pub(crate) fn use_raytrace_state() -> UseRayTrace {
         loop_started: App::use_signal(|| false),
         auto_rotate: App::use_signal(|| true),
         render_scale: App::use_signal(|| 1.0),
+        // `loaded` is `false` while the SSAA wrapper is being acquired
+        // and the first warmup frame is being traced. The view renders
+        // a `c_game_loading_overlay` canvas on top of the raytrace
+        // canvas for exactly this window so the user sees a centered
+        // "Initializing..." line instead of a half-rendered frame. The
+        // loop flips it to `true` after the first successful render,
+        // matching the WebGL / WebGPU tabs' loading UX.
+        loaded: App::use_signal(|| false),
+        // `active` mirrors the WebGL / WebGPU tabs: `true` once the
+        // SSAA canvas is acquired and frames are being traced. The view
+        // does not read it directly today, but exposing it here keeps
+        // the per-tab status surface uniform.
+        active: App::use_signal(|| false),
     }
 }
 
@@ -118,41 +131,53 @@ fn read_raytrace_canvas_size(canvas_selector: &str) -> Option<(f64, f64)> {
     Some((rect.width(), rect.height()))
 }
 
-/// Acquires the 2D context for the RayTrace demo canvas, resizing the
-/// backing buffer to the requested pixel dimensions if needed.
+/// Acquires the Canvas 2D context for the RayTrace demo canvas wrapped in
+/// a `SsaaCanvas` so all ray-traced geometry is rendered into an
+/// offscreen 2x backing store and downscaled onto the display canvas
+/// with `imageSmoothingEnabled = true` / `imageSmoothingQuality = "high"`.
 ///
-/// Returns `None` if the canvas element cannot be found (for example
-/// while the page is mid-route transition) or if a 2D context cannot be
-/// acquired.
+/// Without SSAA the ray-traced framebuffer is uploaded via
+/// `put_image_data` straight to the visible canvas, so the browser
+/// composites it at its native (4:3 ladder) resolution into the 3:2
+/// inline CSS box. The bilinear upscale on a hard-edged framebuffer
+/// produces visible ball-edge and ground-edge aliasing, exactly the
+/// "all elements not anti-aliased" report the user filed.
 ///
-/// # Arguments
-///
-/// - `u32` - The backing buffer width in pixels.
-/// - `u32` - The backing buffer height in pixels.
+/// The 2x SSAA wrapper produces a smoother downscale pass on every
+/// frame: the 2D context's high-quality image smoothing averages
+/// adjacent framebuffer pixels into the display canvas's backing
+/// store, smoothing the otherwise-jagged edges of the ray-traced
+/// spheres, the ground AABB outline, and the emissive sphere's
+/// terminator.
 ///
 /// # Returns
 ///
-/// - `Option<(HtmlCanvasElement, CanvasRenderingContext2d)>` - The canvas and its 2D context.
-fn acquire_raytrace_canvas(
-    width: u32,
-    height: u32,
-) -> Option<(HtmlCanvasElement, CanvasRenderingContext2d)> {
+/// - `Option<(HtmlCanvasElement, SsaaCanvas)>` - The display canvas
+///   plus the SSAA wrapper, or `None` if the canvas element was not
+///   found or a 2D context could not be acquired.
+fn acquire_raytrace_ssaa_canvas() -> Option<(HtmlCanvasElement, SsaaCanvas)> {
     let window_value: Window = window()?;
+    let is_mobile: bool = window_value
+        .inner_width()
+        .ok()
+        .and_then(|value: JsValue| value.as_f64())
+        .is_some_and(|width: f64| width < 768.0);
+    let scale_factor: f64 = if is_mobile { 1.0 } else { 2.0 };
+    let (canvas_width, canvas_height): (f64, f64) =
+        read_raytrace_canvas_size(RAYTRACE_CANVAS_SELECTOR)?;
+    let ssaa_canvas: SsaaCanvas = SsaaCanvas::from_selector_with_scale(
+        RAYTRACE_CANVAS_SELECTOR,
+        canvas_width,
+        canvas_height,
+        scale_factor,
+    )?;
     let document_value: Document = window_value.document()?;
     let element: Element = document_value
         .query_selector(RAYTRACE_CANVAS_SELECTOR)
         .ok()
         .flatten()?;
-    let canvas: HtmlCanvasElement = element.unchecked_into();
-    if canvas.width() != width {
-        canvas.set_width(width);
-    }
-    if canvas.height() != height {
-        canvas.set_height(height);
-    }
-    let context_object: Object = canvas.get_context(RAYTRACE_CONTEXT_TYPE).ok().flatten()?;
-    let context: CanvasRenderingContext2d = context_object.unchecked_into();
-    Some((canvas, context))
+    let display_canvas: HtmlCanvasElement = element.unchecked_into();
+    Some((display_canvas, ssaa_canvas))
 }
 
 /// Builds the static raytracing scene used by the RayTrace demo.
@@ -388,30 +413,105 @@ fn render_raytrace_frame(
     }
 }
 
-/// Uploads the RGBA framebuffer to the canvas in a single
-/// `put_image_data` call.
+/// Paints the RayTrace CSS-framebackground (the 4:3 ladder region) onto
+/// the supplied `SsaaCanvas` offscreen context and presents the
+/// high-quality downscale to the display canvas.
 ///
-/// Replaces the old per-pixel `fillStyle` + `fill_rect` path, which
-/// cost one `format!` allocation plus two JS crossings per pixel per
-/// frame.
+/// Three concerns drive the layout:
+///
+/// 1. **The 4:3 ladder is smaller than the offscreen context.** The
+///    `SsaaCanvas` is sized to the raytrace canvas's CSS box
+///    (`c_game_canvas_wrapper`, 3:2 inline) which is wider than the
+///    4:3 ladder framebuffer. A `put_image_data` upload to `(0, 0)`
+///    would leave the right 12% of the offscreen backing black. The
+///    visual cost is a permanently-letterboxed right edge inside the
+///    SSAA buffer, which the downscale faithfully composites.
+///
+/// 2. **`put_image_data` is a raw upload** with no image-smoothing,
+///    so the ladder framebuffer's hard edges survive the 2x SSAA
+///    downscale only when the ladder size matches the offscreen
+///    physical size exactly. They do not (the ladder is 320x240 at
+///    scale 1.0, the offscreen is `css_w * 2 * dpr` x
+///    `css_h * 2 * dpr`).
+///
+/// 3. **`draw_image` is the only path that respects
+///    `imageSmoothingEnabled`.** We upload the ladder framebuffer
+///    to a fresh 4:3 `HtmlCanvasElement` (its 2D context is
+///    transparent) and then `draw_image` it onto the SSAA offscreen
+///    context centered inside the wrapper's 4:3 letterbox region.
+///    The drawImage call stretches the 4:3 source onto a 4:3
+///    destination with `imageSmoothingEnabled = "high"`, which
+///    smooths the source's hard edges on the way in. The
+///    subsequent `SsaaCanvas::present` does a second
+///    `imageSmoothingHigh` downscale from the offscreen to the
+///    display canvas, stacking two smoothing passes on the same
+///    edge pixels — exactly the dual-stage SSAA the 3D game page
+///    uses for its cube and ball rendering.
+///
+/// The 4:3 destination rectangle is computed from the live canvas
+/// CSS box: `min(width, height * 4/3)` wide, `min(height, width *
+/// 3/4)` tall, centered. Inline (3:2) CSS boxes get a horizontal
+/// letterbox (CSS box wider than 4:3); fullscreen (16:9) CSS boxes
+/// get a vertical letterbox (CSS box taller than 4:3). Either way
+/// the destination is a 4:3 rectangle that exactly fits the ladder
+/// framebuffer's native aspect ratio so the drawImage call does no
+/// additional aspect-ratio stretch.
 ///
 /// # Arguments
 ///
-/// - `&CanvasRenderingContext2d` - The target 2D context.
+/// - `&SsaaCanvas` - The SSAA wrapper whose offscreen context is
+///   the draw target.
 /// - `&mut [u8]` - The RGBA framebuffer (length `width * height * 4`).
 /// - `u32` - The framebuffer width in pixels.
 /// - `u32` - The framebuffer height in pixels.
 fn present_raytrace_framebuffer(
-    context: &CanvasRenderingContext2d,
+    ssaa_canvas: &SsaaCanvas,
     buffer: &mut [u8],
     width: u32,
     height: u32,
 ) {
+    let Some(window_value): Option<Window> = window() else {
+        return;
+    };
+    let Some(document_value): Option<Document> = window_value.document() else {
+        return;
+    };
+    let Ok(source_canvas): Result<HtmlCanvasElement, JsValue> = document_value
+        .create_element("canvas")
+        .map(|element: Element| element.unchecked_into())
+    else {
+        return;
+    };
+    source_canvas.set_width(width);
+    source_canvas.set_height(height);
+    let Ok(Some(source_context_object)): Result<Option<Object>, JsValue> =
+        source_canvas.get_context(RAYTRACE_CONTEXT_TYPE)
+    else {
+        return;
+    };
+    let source_context: CanvasRenderingContext2d = source_context_object.unchecked_into();
     let image_data: Result<ImageData, JsValue> =
         ImageData::new_with_u8_clamped_array_and_sh(wasm_bindgen::Clamped(buffer), width, height);
-    if let Ok(image_data) = image_data {
-        let _: Result<(), JsValue> = context.put_image_data(&image_data, 0.0, 0.0);
-    }
+    let Ok(image_data) = image_data else {
+        return;
+    };
+    let _: Result<(), JsValue> = source_context.put_image_data(&image_data, 0.0, 0.0);
+    let offscreen_context: &CanvasRenderingContext2d = ssaa_canvas.get_offscreen_context();
+    let offscreen_width: f64 = ssaa_canvas.get_width();
+    let offscreen_height: f64 = ssaa_canvas.get_height();
+    let dest_w: f64 = offscreen_width.min(offscreen_height * 4.0 / 3.0);
+    let dest_h: f64 = offscreen_height.min(offscreen_width * 3.0 / 4.0);
+    let dest_x: f64 = (offscreen_width - dest_w) * 0.5;
+    let dest_y: f64 = (offscreen_height - dest_h) * 0.5;
+    let _: Result<(), JsValue> = offscreen_context
+        .draw_image_with_html_canvas_element_and_dw_and_dh(
+            &source_canvas,
+            dest_x,
+            dest_y,
+            dest_w,
+            dest_h,
+        );
+    ssaa_canvas.present();
 }
 
 /// Starts the RayTrace Canvas 2D `requestAnimationFrame` loop.
@@ -441,8 +541,15 @@ pub(crate) fn start_raytrace_loop(state: UseRayTrace, angles: RayTraceCameraAngl
     let fps_timer: Rc<Cell<f64>> = Rc::new(Cell::new(0.0));
     let (occluders, eye) = build_raytrace_scene();
     let scene: RayTraceScene = RayTraceScene::new(occluders);
-    let canvas_cache: Rc<RefCell<Option<(HtmlCanvasElement, CanvasRenderingContext2d)>>> =
+    // The `SsaaCanvas` is rebuilt from scratch on a CSS-box resize
+    // (its constructor re-acquires the display canvas, resizes the
+    // display backing store, and allocates a new offscreen canvas at
+    // the new scale). Storing `None` in the cache and re-acquiring on
+    // divergence mirrors the game_2d Canvas 2D pattern (see
+    // `handle_rescale_dirty_canvas2d` in `game_2d/hook/fn.rs`).
+    let ssaa_cache: Rc<RefCell<Option<(HtmlCanvasElement, SsaaCanvas)>>> =
         Rc::new(RefCell::new(None));
+    let last_canvas_size: Rc<RefCell<(f64, f64)>> = Rc::new(RefCell::new((0.0, 0.0)));
     let framebuffer: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
     // Start at ladder index 7 (scale 1.0): weak clients never start
     // heavy, and the controller climbs toward 4.0 only after sustained
@@ -459,14 +566,32 @@ pub(crate) fn start_raytrace_loop(state: UseRayTrace, angles: RayTraceCameraAngl
     let cell_clone: RafClosureCell = closure_cell.clone();
     let yaw_clone: Rc<Cell<f64>> = angles.yaw.clone();
     let pitch_clone: Rc<Cell<f64>> = angles.pitch.clone();
-    let cache_clone: Rc<RefCell<Option<(HtmlCanvasElement, CanvasRenderingContext2d)>>> =
-        canvas_cache.clone();
+    let cache_clone: Rc<RefCell<Option<(HtmlCanvasElement, SsaaCanvas)>>> = ssaa_cache.clone();
+    let last_size_clone: Rc<RefCell<(f64, f64)>> = last_canvas_size.clone();
     let buffer_clone: Rc<RefCell<Vec<u8>>> = framebuffer.clone();
     let scale_clone: Rc<Cell<usize>> = scale_index.clone();
     let ema_clone: Rc<Cell<f64>> = ema_millis.clone();
     let slow_clone: Rc<Cell<u32>> = slow_frames.clone();
     let fast_clone: Rc<Cell<u32>> = fast_frames.clone();
     let very_fast_clone: Rc<Cell<u32>> = very_fast_frames.clone();
+    let state_for_loop: UseRayTrace = state;
+    // Paint the loading overlay *before* the first frame so the user
+    // sees a centered "Initializing..." line during the SSAA acquire
+    // + first warmup ray pass. The 200-400 ms window is short
+    // enough that the overlay usually disappears in a single frame,
+    // but synchronous WASM module init can delay it further on slow
+    // devices, and without this paint the canvas stays blank /
+    // half-rendered for that entire window.
+    if let Some(window_value) = window() {
+        let loading_closure: Closure<dyn FnMut()> = Closure::wrap(Box::new(move || {
+            draw_game_3d_loading(RAYTRACE_LOADING_CANVAS_SELECTOR, RAYTRACE_CANVAS_SELECTOR);
+        }));
+        let loading_callback: Function =
+            loading_closure.as_ref().unchecked_ref::<Function>().clone();
+        loading_closure.forget();
+        let _ = window_value
+            .set_timeout_with_callback_and_timeout_and_arguments_0(&loading_callback, 0);
+    }
     let raf_closure: Closure<dyn FnMut()> = Closure::wrap(Box::new(move || {
         if raytrace_canvas_detached(RAYTRACE_CANVAS_SELECTOR) {
             return;
@@ -489,28 +614,36 @@ pub(crate) fn start_raytrace_loop(state: UseRayTrace, angles: RayTraceCameraAngl
         };
         let anim_time: f64 = frame_time.min(0.25);
         last_clone.set(current_time);
-        if state.get_auto_rotate().get() {
+        if state_for_loop.get_auto_rotate().get() {
             yaw_clone.set(yaw_clone.get() + RAYTRACE_AUTO_YAW_SPEED * anim_time);
         }
         let yaw: f64 = yaw_clone.get();
         let pitch: f64 = pitch_clone.get();
-        if state.get_running().get() {
+        if state_for_loop.get_running().get() {
+            // Resize the SSAA wrapper when the live CSS box diverges
+            // from the cached size. `getBoundingClientRect` is the
+            // only reading that tracks the live layout; using
+            // `canvas.width` / `canvas.height` would loop on the
+            // backing store we just wrote.
+            let (live_w, live_h): (f64, f64) =
+                read_raytrace_canvas_size(RAYTRACE_CANVAS_SELECTOR).unwrap_or((0.0, 0.0));
+            let (cached_w, cached_h) = *last_size_clone.borrow();
+            let needs_reacquire: bool = live_w > 0.0
+                && live_h > 0.0
+                && (cached_w <= 0.0
+                    || cached_h <= 0.0
+                    || (live_w - cached_w).abs() > 1.5
+                    || (live_h - cached_h).abs() > 1.5);
+            if needs_reacquire {
+                if let Some((_, ssaa_canvas)) = acquire_raytrace_ssaa_canvas() {
+                    *cache_clone.borrow_mut() =
+                        Some((ssaa_canvas.get_display_canvas().clone(), ssaa_canvas));
+                }
+                *last_size_clone.borrow_mut() = (live_w, live_h);
+            }
             let scale: f64 = RAYTRACE_RENDER_SCALES[scale_clone.get()];
             let (frame_width, frame_height): (u32, u32) = raytrace_scaled_dimensions(scale);
-            let mut cache = cache_clone.borrow_mut();
-            let cached_valid: bool = cache.as_ref().is_some_and(
-                |(canvas, _): &(HtmlCanvasElement, CanvasRenderingContext2d)| canvas.is_connected(),
-            );
-            if !cached_valid {
-                *cache = acquire_raytrace_canvas(frame_width, frame_height);
-            }
-            if let Some((canvas, context)) = cache.as_ref() {
-                if canvas.width() != frame_width {
-                    canvas.set_width(frame_width);
-                }
-                if canvas.height() != frame_height {
-                    canvas.set_height(frame_height);
-                }
+            if let Some((_canvas, ssaa_canvas)) = cache_clone.borrow().as_ref() {
                 let lights: LightingUniforms = build_raytrace_lighting(eye, yaw);
                 let render_start: f64 = performance.now();
                 {
@@ -528,7 +661,12 @@ pub(crate) fn start_raytrace_loop(state: UseRayTrace, angles: RayTraceCameraAngl
                         yaw,
                         pitch,
                     );
-                    present_raytrace_framebuffer(context, &mut buffer, frame_width, frame_height);
+                    present_raytrace_framebuffer(
+                        ssaa_canvas,
+                        &mut buffer,
+                        frame_width,
+                        frame_height,
+                    );
                 }
                 let render_millis: f64 = performance.now() - render_start;
                 let ema_prev: f64 = ema_clone.get();
@@ -578,7 +716,25 @@ pub(crate) fn start_raytrace_loop(state: UseRayTrace, angles: RayTraceCameraAngl
                     slow_clone.set(0);
                     fast_clone.set(0);
                     very_fast_clone.set(0);
-                    state.get_render_scale().set(RAYTRACE_RENDER_SCALES[next]);
+                    state_for_loop
+                        .get_render_scale()
+                        .set(RAYTRACE_RENDER_SCALES[next]);
+                }
+                // Flip the active / loaded flags on the first successful
+                // frame so the loading overlay unloads and the
+                // `Status: ...` banner reports a live renderer. The
+                // `loaded` set is delayed by
+                // `RAYTRACE_CANVAS_2D_LOADING_MIN_MILLIS` so the
+                // overlay stays painted for a minimum visible duration
+                // even when the SSAA acquire + first frame finishes
+                // in less than a frame budget — the same UX the
+                // WebGL / WebGPU tabs use via `raytrace_set_loaded_delayed`.
+                if !state_for_loop.get_active().get() {
+                    state_for_loop.get_active().set(true);
+                    raytrace_set_loaded_delayed_canvas2d(
+                        state_for_loop.get_loaded(),
+                        RAYTRACE_CANVAS_2D_LOADING_MIN_MILLIS,
+                    );
                 }
             }
         }
@@ -586,7 +742,7 @@ pub(crate) fn start_raytrace_loop(state: UseRayTrace, angles: RayTraceCameraAngl
         fps_clone.set(fps_clone.get() + frame_time);
         if fps_clone.get() >= 1.0 {
             let fps: f64 = f64::from(frame_clone.get()) / fps_clone.get();
-            state.get_fps().set(fps);
+            state_for_loop.get_fps().set(fps);
             frame_clone.set(0);
             fps_clone.set(0.0);
         }
@@ -957,6 +1113,35 @@ fn pack_raytrace_gpu_uniform(yaw: f64, pitch: f64, width: f64, height: f64) -> V
     data.extend_from_slice(&[0.10, 0.10, 0.14, 0.0]);
     data.extend_from_slice(&[width as f32, height as f32, 0.0, 0.0]);
     data
+}
+
+/// Sets the Canvas 2D `loaded` signal after a short delay so the
+/// loading overlay is actually painted before it is removed.
+///
+/// Mirrors [`raytrace_set_loaded_delayed`] (used by the WebGL / WebGPU
+/// tabs) and shares its `GAME_3D_LOADING_MIN_MILLIS` floor so the
+/// overlay stays visible for a minimum duration even on devices where
+/// the first frame finishes inside the same `requestAnimationFrame`
+/// tick that the overlay is mounted on. Reusing the same floor keeps
+/// all three RayTrace tabs visually consistent: the user always sees
+/// the "Initializing..." text for the same wall-clock window no
+/// matter which tab they boot the page on or switch into.
+///
+/// # Arguments
+///
+/// - `Signal<bool>` - The Canvas 2D `loaded` signal to set.
+/// - `i32` - The delay in milliseconds before setting the signal.
+fn raytrace_set_loaded_delayed_canvas2d(loaded: Signal<bool>, millis: i32) {
+    let loaded_closure: Closure<dyn FnMut()> = Closure::wrap(Box::new(move || {
+        loaded.set(true);
+    }));
+    let loaded_callback: Function = loaded_closure.as_ref().unchecked_ref::<Function>().clone();
+    loaded_closure.forget();
+    let Some(loaded_window): Option<Window> = window() else {
+        return;
+    };
+    let _ = loaded_window
+        .set_timeout_with_callback_and_timeout_and_arguments_0(&loaded_callback, millis);
 }
 
 /// Sets the backend `loaded` signal after a short delay so the loading

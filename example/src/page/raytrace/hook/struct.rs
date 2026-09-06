@@ -22,6 +22,28 @@ pub(crate) struct UseRayTrace {
     /// 2.0 = 640x480 super-sampled).
     #[get(type(copy))]
     pub(crate) render_scale: Signal<f64>,
+    /// Whether the RayTrace Canvas 2D tab has finished its first warmup
+    /// frame and is ready to render.
+    ///
+    /// Mirrors the `loaded` signal exposed by the WebGL / WebGPU tabs
+    /// so all three RayTrace tabs share the same loading-overlay UX:
+    /// the view renders a `c_game_loading_overlay` canvas on top of the
+    /// raytrace canvas while `loaded` is `false`, and the loop flips it
+    /// to `true` after the SSAA wrapper is acquired and the first frame
+    /// has been traced. Without this signal the Canvas 2D tab would
+    /// show a blank / half-rendered canvas during the 200-400 ms
+    /// warmup that the SSAA acquire + first per-pixel ray pass cost
+    /// (scenes are precomputed but the offscreen canvas allocate +
+    /// 2D-context acquire + initial put_image_data are not free).
+    #[get(type(copy))]
+    pub(crate) loaded: Signal<bool>,
+    /// Whether the Canvas 2D renderer is active and rendering. The
+    /// WebGL / WebGPU tabs already carry an `active` signal; mirroring
+    /// it here keeps the status banner code path identical across
+    /// tabs and gives the future engine-rewrite a uniform status
+    /// surface to read from.
+    #[get(type(copy))]
+    pub(crate) active: Signal<bool>,
 }
 
 /// Reactive state for the RayTrace WebGL backend tab.

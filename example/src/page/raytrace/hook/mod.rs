@@ -1,7 +1,7 @@
 mod r#const;
-mod raytrace_fn;
+mod r#fn;
 mod r#struct;
 
-pub(crate) use {r#const::*, raytrace_fn::*, r#struct::*};
+pub(crate) use {r#const::*, r#fn::*, r#struct::*};
 
 use super::*;
