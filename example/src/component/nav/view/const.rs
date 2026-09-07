@@ -31,7 +31,7 @@ pub(crate) const NAV_ITEMS: &[(&str, &str, &str)] = &[
     ("💬", "Modal", "/modal"),
     ("👁️", "Observer", "/observer"),
     ("🛡️", "Protect", "/hooks-protect"),
-    ("🔦", "Ray Trace", "/raytrace"),
+    ("🔦", "RayTrace", "/raytrace"),
     ("📡", "SSE", "/sse"),
     ("📋", "Select", "/select"),
     ("⏲️", "Timing", "/hooks-timing"),
