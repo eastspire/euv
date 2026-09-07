@@ -35,14 +35,14 @@ pub(crate) fn page_raytrace(node: VirtualNode<PageRaytraceProps>) -> VirtualNode
             class: c_page_container()
             euv_header {
                 icon: "🔦"
-                title: "Ray Trace"
+                title: "RayTrace"
                 subtitle: "A real-time ray tracer rendered three ways: a Canvas 2D software path with an ImageData fast path and adaptive internal resolution, a WebGL 2 GLSL fragment-shader path, and a WebGPU WGSL path. All backends trace the same scene (1 mirror sphere + 1 emissive sphere + 1 ground AABB) with 2x2 SSAA and up to 4 reflection bounces, and every tab reports an honest wall-clock FPS. Drag the canvas to orbit the camera; the directional sun rotates with the yaw so the lit side of the spheres tracks the orbiting camera. Click Enter Fullscreen for a larger view."
             }
             euv_card {
                 title: match { tab.get() } {
-                    RayTraceTab::Canvas2D => "Ray Trace Demo (2D)",
-                    RayTraceTab::WebGl => "Ray Trace Demo (GL)",
-                    RayTraceTab::WebGpu => "Ray Trace Demo (GPU)",
+                    RayTraceTab::Canvas2D => "RayTrace Demo (2D)",
+                    RayTraceTab::WebGl => "RayTrace Demo (GL)",
+                    RayTraceTab::WebGpu => "RayTrace Demo (GPU)",
                 }
                 div {
                     class: c_tab_bar()
@@ -103,7 +103,7 @@ pub(crate) fn page_raytrace(node: VirtualNode<PageRaytraceProps>) -> VirtualNode
                 }
             }
             euv_card {
-                title: "Ray Trace Backends"
+                title: "RayTrace Backends"
                 match { tab } {
                     RayTraceTab::Canvas2D => {
                         p {
