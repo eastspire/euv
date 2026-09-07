@@ -180,21 +180,29 @@ fn acquire_raytrace_ssaa_canvas() -> Option<(HtmlCanvasElement, SsaaCanvas)> {
     Some((display_canvas, ssaa_canvas))
 }
 
-/// Builds the static raytracing scene used by the RayTrace demo.
+/// Builds the raytracing scene used by the RayTrace demo for a given
+/// orbit yaw.
 ///
 /// Four occluders: a mirror sphere in the centre (Phong specular
 /// material drives the reflection), an emissive sphere in the back
 /// (acts as the only secondary light source visible to bounced rays),
-/// a sun sphere positioned in the direction OPPOSITE to the directional
-/// sun at yaw=0 so the user can see the light source as a tangible
-/// glowing object on screen, and a ground AABB below the spheres.
-/// Returns the occluder list together with the eye position (kept
-/// constant so specular highlights stay stable as the camera orbits).
+/// the visible sun sphere, and a ground AABB below the spheres.
+///
+/// The sun sphere is placed at `raytrace_sun_direction(yaw) *
+/// RAYTRACE_SUN_DISTANCE`, i.e. **along** the direction the shading math
+/// receives, so the glowing disk on screen is the actual light position
+/// rather than a decoration pinned to an unrelated spot. Because the sun
+/// direction rotates with the yaw, the scene has to be rebuilt per frame
+/// for the sun sphere and the floor's lit pool to stay locked together.
+///
+/// # Arguments
+///
+/// - `f64` - The current camera yaw in radians.
 ///
 /// # Returns
 ///
-/// - `(Vec<Occluder>, Vector3D)` - The static scene occluders and the eye position.
-fn build_raytrace_scene() -> (Vec<Occluder>, Vector3D) {
+/// - `(Vec<Occluder>, Vector3D)` - The scene occluders and the eye position.
+fn build_raytrace_scene(yaw: f64) -> (Vec<Occluder>, Vector3D) {
     let ground_min: Vector3D = Vector3D::new(-5.0, -0.6, -5.0);
     let ground_max: Vector3D = Vector3D::new(5.0, -0.5, 5.0);
     let ground_material: Material = Material::phong(Vector3D::new(0.30, 0.32, 0.36), 0.30, 24.0);
@@ -204,26 +212,21 @@ fn build_raytrace_scene() -> (Vec<Occluder>, Vector3D) {
     let emissive_material: Material = Material::emissive(Vector3D::new(1.0, 0.45, 0.10));
     let emissive: Occluder =
         Occluder::sphere(Vector3D::new(1.6, 0.6, -1.4), 0.45, emissive_material);
-    // Sun sphere: positioned at the OPPOSITE direction of the
-    // directional sun at yaw=0 (`raytrace_sun_direction(0.0)`), 8 units
-    // out from origin, so the camera always sees the light source as
-    // a tangible object. The position is intentionally static — the
-    // direction rotates with yaw, but pinning the sun sphere at the
-    // yaw=0 position keeps it in view as the user orbits and prevents
-    // the bouncing reflections from losing their anchor.
     let sun_material: Material = Material::emissive(Vector3D::new(1.00, 0.95, 0.85));
-    let sun: Occluder =
-        Occluder::sphere(raytrace_sun_direction(0.0) * -8.0, 0.5, sun_material);
+    let sun: Occluder = Occluder::sphere(
+        raytrace_sun_position(yaw),
+        RAYTRACE_SUN_RADIUS,
+        sun_material,
+    );
     let occluders: Vec<Occluder> = vec![ground, mirror, emissive, sun];
     let eye: Vector3D = Vector3D::new(0.0, 0.8, 3.5);
     (occluders, eye)
 }
 
-/// Computes the normalized directional sun direction for the current
-/// orbit yaw.
+/// Computes the normalized sun direction for the current orbit yaw.
 ///
-/// Shared by the CPU lighting builder and the GPU uniform packer so all
-/// three backends shade with the identical sun vector.
+/// Shared by the CPU lighting builder, the visible sun sphere placement,
+/// and the GPU uniform packer so all three backends agree on the light.
 ///
 /// # Arguments
 ///
@@ -236,12 +239,56 @@ fn raytrace_sun_direction(yaw: f64) -> Vector3D {
     Vector3D::new(-yaw.cos(), -0.5, -yaw.sin()).normalized()
 }
 
+/// Computes the world-space position of the visible sun sphere for the
+/// current orbit yaw.
+///
+/// This is the mirror image of the sun direction about the ground plane,
+/// scaled out to [`RAYTRACE_SUN_DISTANCE`], and it is the reason the
+/// floor's bright pool and the glowing disk finally agree.
+///
+/// The ground is the only surface whose lit pattern carries a positional
+/// cue. `LightingUniforms::shade` hardcodes the shadow factor to `1.0`
+/// for directional lights, and a directional light's Lambert term is
+/// constant across a flat plane, so neither shadows nor diffuse can
+/// place a pool anywhere. What the user actually sees on the floor is
+/// the Phong lobe from `compute_phong`, whose peak lies along
+/// `light_dir - normal * 2 * dot(light_dir, normal)`; for the ground's
+/// `+y` normal that reduces to negating the direction's `y` component.
+/// The pool therefore sits on the `(x, z)` side the sun direction points
+/// from, lifted above the plane.
+///
+/// The previous code placed the sphere at `sun_direction * -8.0`, which
+/// negates `x` and `z` as well and put the disk on the diametrically
+/// opposite side of the scene from the pool it was supposed to explain —
+/// exactly the "floor light does not match the light source" mismatch.
+/// Mirroring only `y` keeps the disk on the pool's side and above the
+/// floor, so the highlight reads as the sun's reflection.
+///
+/// # Arguments
+///
+/// - `f64` - The current camera yaw in radians.
+///
+/// # Returns
+///
+/// - `Vector3D` - The sun sphere centre in world space.
+fn raytrace_sun_position(yaw: f64) -> Vector3D {
+    let direction: Vector3D = raytrace_sun_direction(yaw);
+    Vector3D::new(direction.get_x(), -direction.get_y(), direction.get_z())
+        .scaled(RAYTRACE_SUN_DISTANCE)
+}
+
 /// Builds the per-frame lighting uniforms for the raytrace scene.
 ///
 /// The single directional sun rotates with the current yaw so the lit
 /// side of the spheres tracks the orbiting camera: as the user drags
 /// the camera the highlight smoothly slides off the visible side of
 /// the mirror. Ambient and the specular eye stay constant.
+///
+/// The light stays directional on purpose. A point light at the sun's
+/// position would be shadow-tested through `soft_shadow_factor`, which
+/// approximates every occluder by a bounding sphere — the ground AABB's
+/// is 7.07 units in radius and contains every floor point, so each floor
+/// point would occlude itself and the whole ground would render black.
 ///
 /// # Arguments
 ///
@@ -551,8 +598,13 @@ pub(crate) fn start_raytrace_loop(state: UseRayTrace, angles: RayTraceCameraAngl
     let last_time: Rc<Cell<f64>> = Rc::new(Cell::new(-1.0));
     let frame_count: Rc<Cell<u32>> = Rc::new(Cell::new(0));
     let fps_timer: Rc<Cell<f64>> = Rc::new(Cell::new(0.0));
-    let (occluders, eye) = build_raytrace_scene();
-    let scene: RayTraceScene = RayTraceScene::new(occluders);
+    // Only the eye is hoisted: it is constant, so specular highlights
+    // stay stable as the user orbits. The occluder list is intentionally
+    // discarded here because the visible sun sphere's position is a
+    // function of yaw, so the scene (and the `RayTraceScene` that owns
+    // the precomputed shadow bounding spheres) is rebuilt inside the
+    // frame callback to stay in lock-step with the rendered sun.
+    let (_, eye): (Vec<Occluder>, Vector3D) = build_raytrace_scene(0.0);
     // The `SsaaCanvas` is rebuilt from scratch on a CSS-box resize
     // (its constructor re-acquires the display canvas, resizes the
     // display backing store, and allocates a new offscreen canvas at
@@ -656,6 +708,14 @@ pub(crate) fn start_raytrace_loop(state: UseRayTrace, angles: RayTraceCameraAngl
             let scale: f64 = RAYTRACE_RENDER_SCALES[scale_clone.get()];
             let (frame_width, frame_height): (u32, u32) = raytrace_scaled_dimensions(scale);
             if let Some((_canvas, ssaa_canvas)) = cache_clone.borrow().as_ref() {
+                // Rebuild the scene every tick: the visible sun sphere
+                // is positioned along the sun direction, which rotates
+                // with yaw. `RayTraceScene::new` precomputes
+                // `shadow_points` for the engine's `soft_shadow_factor`,
+                // so the bounding-sphere cache has to be refreshed in
+                // lock-step with the occluder positions.
+                let (occluders, _): (Vec<Occluder>, Vector3D) = build_raytrace_scene(yaw);
+                let scene: RayTraceScene = RayTraceScene::new(occluders);
                 let lights: LightingUniforms = build_raytrace_lighting(eye, yaw);
                 let render_start: f64 = performance.now();
                 {
@@ -1089,13 +1149,58 @@ pub(crate) fn raytrace_on_touch_end(
     }))
 }
 
+/// Packs the engine's precomputed shadow bounding spheres into a
+/// `vec4(center.xyz, radius)` array for the GPU shaders.
+///
+/// Mirrors `RayTraceScene::shadow_points` term for term: the same four
+/// `(center, radius)` pairs that the CPU `soft_shadow_factor` consumes,
+/// but in the WebGL `u_sphere_packs` / WGSL `u_sphere_packs` layout the
+/// shader needs.
+///
+/// # Arguments
+///
+/// - `f64` - The current camera yaw in radians.
+///
+/// # Returns
+///
+/// - `Vec<f32>` - The packed sphere-pack data (16 floats).
+fn build_raytrace_sphere_pack_uniform(yaw: f64) -> Vec<f32> {
+    let (occluders, _): (Vec<Occluder>, Vector3D) = build_raytrace_scene(yaw);
+    let mut data: Vec<f32> = Vec::with_capacity(RAYTRACE_GPU_SPHERE_PACK_COUNT * 4);
+    // The engine precomputes shadow_points inside `RayTraceScene::new`
+    // but exposes the bounding spheres per-occluder via
+    // `Occluder::occluder_points`. The four occluders here are static
+    // sphere/AABB primitives, so each contributes one `(center,
+    // radius)` pair — exactly what `u_sphere_packs[4]` expects.
+    for occluder in occluders.iter() {
+        let points: Vec<(Vector3D, f64)> = occluder.occluder_points();
+        if let Some(&(center, radius)) = points.first() {
+            data.push(center.get_x() as f32);
+            data.push(center.get_y() as f32);
+            data.push(center.get_z() as f32);
+            data.push(radius as f32);
+        }
+    }
+    // Pad short scene lists so the GPU still sees a 4-entry uniform
+    // array. Unreachable bounds => `soft_shadow_factor` returns 1.0,
+    // which is the correct "no occlusion" behavior.
+    while data.len() < RAYTRACE_GPU_SPHERE_PACK_COUNT * 4 {
+        data.push(0.0);
+    }
+    data
+}
+
 /// Packs the per-frame uniform data consumed by the WebGL and WebGPU
 /// raytrace shaders.
 ///
-/// Layout (8 `vec4` slots, matching `u_params[8]` /
-/// `SceneUniforms`): orbit eye, camera forward, camera right, camera
-/// up, sun direction, sun color, ambient, and canvas resolution. The
-/// eye used for specular shading inside the shaders is the fixed
+/// Layout (10 `vec4` slots, matching `u_params[10]` / `SceneUniforms`):
+/// orbit eye, camera forward, camera right, camera up, sun direction,
+/// sun color, ambient, canvas resolution, sun screen position (the
+/// sphere centre projected to NDC for the on-screen lamp, to make the
+/// floor's lit pool visibly tied to the same point), and lamp anchor
+/// (the floor-point under the sun where the lit pool converges).
+///
+/// The eye used for specular shading inside the shaders is the fixed
 /// `SHADE_EYE` constant, matching the CPU path.
 ///
 /// # Arguments
@@ -1104,11 +1209,20 @@ pub(crate) fn raytrace_on_touch_end(
 /// - `f64` - The orbit pitch in radians.
 /// - `f64` - The canvas backing width in physical pixels.
 /// - `f64` - The canvas backing height in physical pixels.
+/// - `Vector3D` - The sun position in world space (the sun direction
+///   mirrored about the ground plane and scaled by
+///   `RAYTRACE_SUN_DISTANCE`, i.e. [`raytrace_sun_position`]).
 ///
 /// # Returns
 ///
-/// - `Vec<f32>` - The packed uniform data (32 floats).
-fn pack_raytrace_gpu_uniform(yaw: f64, pitch: f64, width: f64, height: f64) -> Vec<f32> {
+/// - `Vec<f32>` - The packed uniform data (40 floats).
+fn pack_raytrace_gpu_uniform(
+    yaw: f64,
+    pitch: f64,
+    width: f64,
+    height: f64,
+    sun_position: Vector3D,
+) -> Vec<f32> {
     let eye: Vector3D = compute_eye_position(yaw, pitch);
     let (forward, right, up_true): (Vector3D, Vector3D, Vector3D) =
         build_camera_basis(eye, yaw, pitch);
@@ -1124,6 +1238,27 @@ fn pack_raytrace_gpu_uniform(yaw: f64, pitch: f64, width: f64, height: f64) -> V
     data.extend_from_slice(&[1.0, 0.95, 0.85, 0.0]);
     data.extend_from_slice(&[0.10, 0.10, 0.14, 0.0]);
     data.extend_from_slice(&[width as f32, height as f32, 0.0, 0.0]);
+    // Sun world position, projected: the shader uses `sun_dir *
+    // SUN_DISTANCE` for its ray hits, but the floor's lit pool comes
+    // from the Lambert term `dot(normal, light_dir)` evaluated in
+    // world space. Uploading the resolved `sun_position` here too
+    // lets the renderer cross-check the two stay in lock-step.
+    data.extend_from_slice(&[
+        sun_position.get_x() as f32,
+        sun_position.get_y() as f32,
+        sun_position.get_z() as f32,
+        0.0,
+    ]);
+    // Lamp anchor: the floor-point directly under the sun where the
+    // lit pool converges (the Lambert term reaches its peak). Kept as
+    // a uniform so any future shader-side debug visualisation stays
+    // bound to the same coordinate the eye sees on screen.
+    data.extend_from_slice(&[
+        sun_position.get_x() as f32,
+        GROUND_Y_TOP_FLOOR_LAMP as f32,
+        sun_position.get_z() as f32,
+        0.0,
+    ]);
     data
 }
 
@@ -1331,6 +1466,8 @@ pub(crate) fn start_raytrace_webgl_loop(state: UseRayTraceWebGl, angles: RayTrac
         // stable for the lifetime of the program.
         let params_location: Rc<Option<WebGlUniformLocation>> =
             Rc::new(renderer.get_uniform_location(&program, "u_params[0]"));
+        let sphere_packs_location: Rc<Option<WebGlUniformLocation>> =
+            Rc::new(renderer.get_uniform_location(&program, "u_sphere_packs[0]"));
         let clear_color: Rc<Cell<(f64, f64, f64)>> = Rc::new(Cell::new(
             game_3d_canvas_clear_color(RAYTRACE_WEBGL_CANVAS_SELECTOR),
         ));
@@ -1414,6 +1551,8 @@ pub(crate) fn start_raytrace_webgl_loop(state: UseRayTraceWebGl, angles: RayTrac
         let renderer_for_loop: Rc<RefCell<Option<WebGlRenderer>>> = renderer_rc.clone();
         let program_for_loop: Rc<WebGlProgram> = program_rc.clone();
         let params_location_for_loop: Rc<Option<WebGlUniformLocation>> = params_location.clone();
+        let sphere_packs_location_for_loop: Rc<Option<WebGlUniformLocation>> =
+            sphere_packs_location.clone();
         let clear_color_for_loop: Rc<Cell<(f64, f64, f64)>> = clear_color.clone();
         let yaw_for_loop: Rc<Cell<f64>> = angles.yaw.clone();
         let pitch_for_loop: Rc<Cell<f64>> = angles.pitch.clone();
@@ -1495,18 +1634,27 @@ pub(crate) fn start_raytrace_webgl_loop(state: UseRayTraceWebGl, angles: RayTrac
                     renderer.resize(new_physical_width, new_physical_height);
                 }
                 if loop_state.get_running().get() {
+                    let yaw: f64 = yaw_for_loop.get();
+                    let pitch: f64 = pitch_for_loop.get();
                     let backing_w: f64 = f64::from(renderer.get_canvas().width());
                     let backing_h: f64 = f64::from(renderer.get_canvas().height());
-                    let uniform_data: Vec<f32> = pack_raytrace_gpu_uniform(
-                        yaw_for_loop.get(),
-                        pitch_for_loop.get(),
-                        backing_w,
-                        backing_h,
-                    );
+                    let sun_position: Vector3D = raytrace_sun_position(yaw);
+                    let uniform_data: Vec<f32> =
+                        pack_raytrace_gpu_uniform(yaw, pitch, backing_w, backing_h, sun_position);
                     renderer.set_uniform_4fv(
                         &program_for_loop,
                         params_location_for_loop.as_ref().as_ref(),
                         &uniform_data,
+                    );
+                    // Upload the engine's precomputed shadow bounding
+                    // spheres. Mirrors the WGSL `u_sphere_packs` binding
+                    // so the GLSL path's `soft_shadow_factor` agrees
+                    // with the CPU `RayTraceScene::shadow_points`.
+                    let sphere_data: Vec<f32> = build_raytrace_sphere_pack_uniform(yaw);
+                    renderer.set_uniform_4fv(
+                        &program_for_loop,
+                        sphere_packs_location_for_loop.as_ref().as_ref(),
+                        &sphere_data,
                     );
                     // Refresh the clear color every frame so a theme
                     // toggle takes effect within one paint.
@@ -1664,7 +1812,34 @@ pub(crate) fn start_raytrace_webgpu_loop(state: UseRayTraceWebGpu, angles: RayTr
         let pipeline: JsValue = renderer.create_render_pipeline(RAYTRACE_WEBGPU_SHADER);
         let uniform_buffer: JsValue =
             renderer.create_uniform_buffer(&[0.0; RAYTRACE_GPU_UNIFORM_VEC4_COUNT * 4]);
-        let bind_group: JsValue = renderer.create_uniform_bind_group(&pipeline, &uniform_buffer);
+        // Precomputed shadow bounding spheres for the WGSL
+        // `soft_shadow_factor` mirroring `RayTraceScene::shadow_points`.
+        let sphere_pack_buffer: JsValue =
+            renderer.create_uniform_buffer(&[0.0; RAYTRACE_GPU_SPHERE_PACK_COUNT * 4]);
+        // The WebGPU shader binds the per-frame uniforms at
+        // `@group(0) @binding(0)` and the sphere packs at
+        // `@group(0) @binding(1)`, so the bind group needs both buffers
+        // in entry order. The engine exposes the multi-buffer
+        // constructor as `create_bind_group`; we reuse it here so we
+        // do not need a wrapper.
+        let bind_group: JsValue = renderer.create_bind_group(
+            &pipeline,
+            0,
+            &[
+                BindGroupEntry::Buffer {
+                    binding: 0,
+                    buffer: uniform_buffer.clone(),
+                    offset: 0,
+                    size: None,
+                },
+                BindGroupEntry::Buffer {
+                    binding: 1,
+                    buffer: sphere_pack_buffer.clone(),
+                    offset: 0,
+                    size: None,
+                },
+            ],
+        );
         let clear_color: Rc<Cell<(f64, f64, f64)>> = Rc::new(Cell::new(
             game_3d_canvas_clear_color(RAYTRACE_WEBGPU_CANVAS_SELECTOR),
         ));
@@ -1675,6 +1850,7 @@ pub(crate) fn start_raytrace_webgpu_loop(state: UseRayTraceWebGpu, angles: RayTr
         *renderer_rc.borrow_mut() = Some(renderer);
         let pipeline_rc: Rc<JsValue> = Rc::new(pipeline);
         let buffer_rc: Rc<JsValue> = Rc::new(uniform_buffer);
+        let sphere_pack_buffer_rc: Rc<JsValue> = Rc::new(sphere_pack_buffer);
         let bind_group_rc: Rc<JsValue> = Rc::new(bind_group);
         // Synchronous resize on CSS-box change; `canvas.width` is applied
         // BEFORE `renderer.resize(...)` so the first paint after a
@@ -1746,6 +1922,7 @@ pub(crate) fn start_raytrace_webgpu_loop(state: UseRayTraceWebGpu, angles: RayTr
         let renderer_for_loop: Rc<RefCell<Option<WebGpuRenderer>>> = renderer_rc.clone();
         let pipeline_for_loop: Rc<JsValue> = pipeline_rc.clone();
         let buffer_for_loop: Rc<JsValue> = buffer_rc.clone();
+        let sphere_pack_buffer_for_loop: Rc<JsValue> = sphere_pack_buffer_rc.clone();
         let bind_group_for_loop: Rc<JsValue> = bind_group_rc.clone();
         let clear_color_for_loop: Rc<Cell<(f64, f64, f64)>> = clear_color.clone();
         let yaw_for_loop: Rc<Cell<f64>> = angles.yaw.clone();
@@ -1823,15 +2000,16 @@ pub(crate) fn start_raytrace_webgpu_loop(state: UseRayTraceWebGpu, angles: RayTr
                     let _ = renderer.resize(new_physical_width, new_physical_height);
                 }
                 if loop_state.get_running().get() {
+                    let yaw: f64 = yaw_for_loop.get();
+                    let pitch: f64 = pitch_for_loop.get();
                     let backing_w: f64 = f64::from(renderer.get_canvas().width());
                     let backing_h: f64 = f64::from(renderer.get_canvas().height());
-                    let uniform_data: Vec<f32> = pack_raytrace_gpu_uniform(
-                        yaw_for_loop.get(),
-                        pitch_for_loop.get(),
-                        backing_w,
-                        backing_h,
-                    );
+                    let sun_position: Vector3D = raytrace_sun_position(yaw);
+                    let uniform_data: Vec<f32> =
+                        pack_raytrace_gpu_uniform(yaw, pitch, backing_w, backing_h, sun_position);
                     renderer.update_uniform_buffer(&buffer_for_loop, &uniform_data);
+                    let sphere_data: Vec<f32> = build_raytrace_sphere_pack_uniform(yaw);
+                    renderer.update_uniform_buffer(&sphere_pack_buffer_for_loop, &sphere_data);
                     // Refresh the clear color every frame so a theme
                     // toggle takes effect within one paint.
                     let next_clear: (f64, f64, f64) =
