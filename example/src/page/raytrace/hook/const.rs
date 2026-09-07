@@ -492,17 +492,21 @@ void main() {
     vec3 sun_color = u_params[5].rgb;
     vec3 ambient = u_params[6].rgb;
     vec2 resolution = u_params[7].xy;
-    // SUN_DIR above is used to derive the sun sphere position and the
-    // shadow-ray target (`sun_dir * SUN_DISTANCE`). The visual sun
-    // sphere centre and the floor's lit pool therefore share the same
-    // source vector — rotating the camera no longer detaches them.
     float aspect = resolution.x / resolution.y;
     float base_x = floor(gl_FragCoord.x);
     // gl_FragCoord is bottom-up; the CPU path scans top-down, which
     // flips ndc_y. Sampling bottom-up directly yields the same set of
     // sub-sample NDC values.
     float base_y = floor(gl_FragCoord.y);
-    vec3 sun_position = sun_dir * SUN_DISTANCE;
+    // The visible sun sphere and the shadow-ray target both sit at the
+    // sun direction MIRRORED ABOUT THE GROUND PLANE (only y is negated),
+    // scaled to SUN_DISTANCE. `sun_dir` points down (negative y), so
+    // using it unmirrored would bury the sun under the floor while the
+    // floor's Phong lobe — whose peak is `reflect(sun_dir, +y)`, i.e.
+    // the same y-negation — stayed above it. Mirroring here is what
+    // keeps the glowing disk and the floor's lit pool on the same side.
+    // Mirrors the CPU path's `raytrace_sun_position`.
+    vec3 sun_position = vec3(sun_dir.x, -sun_dir.y, sun_dir.z) * SUN_DISTANCE;
     vec3 acc = vec3(0.0);
     for (int sy = 0; sy < 2; sy++) {
         for (int sx = 0; sx < 2; sx++) {
@@ -685,7 +689,13 @@ fn closest_hit_index(origin: vec3<f32>, dir: vec3<f32>, sun_dir: vec3<f32>) -> H
         best.position = origin + dir * t;
         best.normal = candidate_normal;
     }
-    t = sphere_t(origin, dir, sun_dir * SUN_DISTANCE, SUN_RADIUS, &candidate_normal);
+    t = sphere_t(
+        origin,
+        dir,
+        vec3<f32>(sun_dir.x, -sun_dir.y, sun_dir.z) * SUN_DISTANCE,
+        SUN_RADIUS,
+        &candidate_normal,
+    );
     if t >= T_MIN && t <= T_MAX && (best.index < 0 || t < best.t) {
         best.index = 3;
         best.t = t;
@@ -774,7 +784,7 @@ fn trace(origin_arg: vec3<f32>, dir_arg: vec3<f32>, sun_dir: vec3<f32>) -> vec3<
     var origin = origin_arg;
     var dir = dir_arg;
     var depth = 0;
-    let sun_position = sun_dir * SUN_DISTANCE;
+    let sun_position = vec3<f32>(sun_dir.x, -sun_dir.y, sun_dir.z) * SUN_DISTANCE;
     for (var bounce = 0; bounce <= MAX_BOUNCES; bounce++) {
         let hit = closest_hit_index(origin, dir, sun_dir);
         if hit.index < 0 {

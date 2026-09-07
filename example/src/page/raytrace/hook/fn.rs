@@ -1209,8 +1209,9 @@ fn build_raytrace_sphere_pack_uniform(yaw: f64) -> Vec<f32> {
 /// - `f64` - The orbit pitch in radians.
 /// - `f64` - The canvas backing width in physical pixels.
 /// - `f64` - The canvas backing height in physical pixels.
-/// - `Vector3D` - The sun position in world space (already
-///   `raytrace_sun_direction(yaw) * RAYTRACE_SUN_DISTANCE`).
+/// - `Vector3D` - The sun position in world space (the sun direction
+///   mirrored about the ground plane and scaled by
+///   `RAYTRACE_SUN_DISTANCE`, i.e. [`raytrace_sun_position`]).
 ///
 /// # Returns
 ///
