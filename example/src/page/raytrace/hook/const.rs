@@ -166,8 +166,38 @@ pub(crate) const RAYTRACE_WEBGPU_LOADING_CANVAS_SELECTOR: &str = "#raytrace-webg
 
 /// The number of `vec4` slots in the GPU uniform block shared by the
 /// WebGL and WebGPU raytrace shaders: orbit eye, camera forward, right,
-/// up, sun direction, sun color, ambient, and resolution.
-pub(crate) const RAYTRACE_GPU_UNIFORM_VEC4_COUNT: usize = 8;
+/// up, sun direction, sun color, ambient, resolution, sun screen
+/// position, and lamp anchor (the floor-point under the sun where the
+/// lit pool converges).
+pub(crate) const RAYTRACE_GPU_UNIFORM_VEC4_COUNT: usize = 10;
+
+/// The y-coordinate of the floor's top surface.
+///
+/// The lamp-anchor uniform copies the sun's x/z onto this constant so
+/// the shader knows where on the AABB the lit pool converges. Mirrors
+/// the `GROUND_MAX` `y` value baked into the WebGL and WebGPU shaders.
+pub(crate) const GROUND_Y_TOP_FLOOR_LAMP: f64 = -0.5;
+
+/// Distance from the scene origin at which the visible sun sphere is
+/// placed along the sun direction.
+///
+/// The sun sphere's world position is always
+/// `raytrace_sun_direction(yaw) * RAYTRACE_SUN_DISTANCE`, so the glowing
+/// disk the user sees and the vector the shading math integrates share a
+/// single source of truth and can never drift apart. All three backends
+/// derive the sphere centre from the same sun-direction value: the CPU
+/// path multiplies it in `build_raytrace_scene`, and the two shaders
+/// multiply the `sun_dir` uniform by `SUN_DISTANCE`.
+pub(crate) const RAYTRACE_SUN_DISTANCE: f64 = 8.0;
+
+/// Radius of the visible sun sphere in world units.
+///
+/// Mirrors `SUN_RADIUS` in the WebGL and WebGPU shaders.
+pub(crate) const RAYTRACE_SUN_RADIUS: f64 = 0.5;
+
+/// The number of precomputed occluder bounding spheres uploaded each
+/// frame to the GPU shaders (matches the engine's `shadow_points`).
+pub(crate) const RAYTRACE_GPU_SPHERE_PACK_COUNT: usize = 4;
 
 /// The GLSL ES 3.00 vertex shader source for the RayTrace WebGL demo.
 ///
@@ -201,7 +231,8 @@ pub(crate) const RAYTRACE_WEBGL_FRAGMENT_SHADER: &str = r#"#version 300 es
 
 precision highp float;
 
-uniform vec4 u_params[8];
+uniform vec4 u_params[10];
+uniform vec4 u_sphere_packs[4];
 
 out vec4 out_color;
 
@@ -222,15 +253,12 @@ const vec3 MIRROR_CENTER = vec3(0.0, 0.4, 0.0);
 const float MIRROR_RADIUS = 0.9;
 const vec3 EMISSIVE_CENTER = vec3(1.6, 0.6, -1.4);
 const float EMISSIVE_RADIUS = 0.45;
-// Sun sphere: positioned at the OPPOSITE direction of the directional
-// sun at yaw=0 (`raytrace_sun_direction(0.0)` = `vec3(-1, -0.5, 0)`
-// normalized = `vec3(-0.894, -0.447, 0)`), 8 units out from origin, so
-// the camera always sees the directional light source as a tangible
-// object. The position is intentionally static — the sun direction
-// rotates with yaw, but pinning the sphere at the yaw=0 position keeps
-// it in view as the user orbits and prevents the bouncing reflections
-// from losing their anchor.
-const vec3 SUN_CENTER = vec3(7.155, 3.578, 0.0);
+// Sun sphere: positioned along the sun direction at distance
+// SUN_DISTANCE so the visible disk and the floor's lit pool share a
+// single source of truth. Replaces the previous yaw=0-only placement,
+// which kept the sphere pinned to one corner regardless of the
+// orbiting sun direction.
+const float SUN_DISTANCE = 8.0;
 const float SUN_RADIUS = 0.5;
 
 vec3 material_albedo(int index) {
@@ -311,6 +339,7 @@ int closest_hit_index(
     vec3 dir,
     float t_min,
     float t_max,
+    vec3 sun_position,
     out float best_t,
     out vec3 best_pos,
     out vec3 best_normal
@@ -341,7 +370,7 @@ int closest_hit_index(
         best_pos = origin + dir * t;
         best_normal = candidate_normal;
     }
-    t = sphere_t(origin, dir, SUN_CENTER, SUN_RADIUS, candidate_normal);
+    t = sphere_t(origin, dir, sun_position, SUN_RADIUS, candidate_normal);
     if (t >= t_min && t <= t_max && (best_index < 0 || t < best_t)) {
         best_index = 3;
         best_t = t;
@@ -351,34 +380,85 @@ int closest_hit_index(
     return best_index;
 }
 
-// Mirrors engine `LightingUniforms::shade` for the single directional
-// sun: ambient + Lambert diffuse + Phong specular + emissive, shadow
-// unconditionally 1.0 for directional lights, specular intensity
-// unchanged because the sun's falloff is 0.0.
-vec3 shade(vec3 position, vec3 normal, int index, vec3 sun_dir, vec3 sun_color, vec3 ambient) {
+// Mirrors engine `LightingUniforms::shade` for the positional sun:
+// ambient + Lambert diffuse + Phong specular + emissive. The sun is
+// point at `sun_position` so the engine's `soft_shadow_factor` is used
+// in `trace` to evaluate occlusion; shadows attenuate the diffuse and
+// specular contributions. The falloff is 0 (set by `build_raytrace_lighting`)
+// so the sun reads as a distant source and the floor stays uniformly
+// lit wherever the shadow rays reach it.
+vec3 shade(vec3 position, vec3 normal, int index, vec3 sun_position, vec3 sun_color, vec3 ambient, float shadow) {
     vec3 to_eye = SHADE_EYE - position;
     float view_dist = length(to_eye);
     vec3 view_dir = vec3(0.0);
     if (view_dist > EPS) {
         view_dir = to_eye / view_dist;
     }
+    vec3 to_light = sun_position - position;
+    float light_dist = length(to_light);
+    vec3 light_dir = vec3(0.0);
+    if (light_dist > EPS) {
+        light_dir = to_light / light_dist;
+    }
     vec3 albedo = material_albedo(index);
-    float cos_term = max(dot(normal, sun_dir), 0.0);
-    vec3 diffuse = sun_color * cos_term * albedo;
+    float cos_term = max(dot(normal, light_dir), 0.0);
+    vec3 diffuse = sun_color * (cos_term * shadow) * albedo;
     float specular = material_specular(index);
     vec3 spec = vec3(0.0);
     if (specular > 0.0) {
-        vec3 reflect_dir = normalize(sun_dir - normal * (2.0 * dot(sun_dir, normal)));
+        vec3 reflect_dir = normalize(light_dir - normal * (2.0 * dot(light_dir, normal)));
         float spec_factor = pow(max(dot(reflect_dir, view_dir), 0.0), material_shininess(index));
-        spec = sun_color * (spec_factor * specular);
+        spec = sun_color * (spec_factor * specular * shadow);
     }
     return ambient + diffuse + spec + material_emissive(index);
+}
+
+// Mirrors engine `soft_shadow_factor`: returns 1.0 if no occluder
+// blocks the path from `origin` toward `light_pos`, otherwise 0.0.
+// The bounding spheres `(center, radius)` are precomputed once per
+// frame in `RayTraceScene::new` and packed into the `u_sphere_packs`
+// uniform array below; this stays binary (no penumbra sampling) to
+// mirror the engine exactly.
+float occluder_shadow_sphere(vec3 origin, vec3 light_pos, vec3 center, float radius, float dist_to_light) {
+    vec3 to_light = light_pos - origin;
+    vec3 dir = vec3(0.0);
+    if (dist_to_light > EPS) {
+        dir = to_light / dist_to_light;
+    }
+    vec3 oc = origin - center;
+    float b = dot(oc, dir);
+    float c = dot(oc, oc) - radius * radius;
+    float disc = b * b - c;
+    if (disc < 0.0) { return 1.0; }
+    float sq = sqrt(disc);
+    float t1 = -b - sq;
+    float t2 = -b + sq;
+    float t = t1;
+    if (t1 < 0.0) {
+        t = t2;
+    }
+    if (t < 0.0 || t >= dist_to_light - EPS) { return 1.0; }
+    return 0.0;
+}
+
+// Four precomputed occluder bounding spheres packed as `vec4(center.xyz,
+// radius)`. Matches the engine's `shadow_points` exactly. Declared once
+// at the top of the shader alongside `u_params`.
+
+float soft_shadow_factor(vec3 origin, vec3 light_pos) {
+    float dist_to_light = length(light_pos - origin);
+    float shadow = 1.0;
+    shadow *= occluder_shadow_sphere(origin, light_pos, u_sphere_packs[0].xyz, u_sphere_packs[0].w, dist_to_light);
+    shadow *= occluder_shadow_sphere(origin, light_pos, u_sphere_packs[1].xyz, u_sphere_packs[1].w, dist_to_light);
+    shadow *= occluder_shadow_sphere(origin, light_pos, u_sphere_packs[2].xyz, u_sphere_packs[2].w, dist_to_light);
+    shadow *= occluder_shadow_sphere(origin, light_pos, u_sphere_packs[3].xyz, u_sphere_packs[3].w, dist_to_light);
+    return shadow;
 }
 
 // Mirrors engine `trace_bounces`: throughput-weighted iterative
 // reflection with at most MAX_BOUNCES bounces; a miss adds the ambient
 // color scaled by the current throughput.
-vec3 trace(vec3 origin, vec3 dir, vec3 sun_dir, vec3 sun_color, vec3 ambient) {
+vec3 trace(vec3 origin, vec3 dir, vec3 sun_position, vec3 sun_color, vec3 ambient) {
     vec3 color = vec3(0.0);
     float throughput = 1.0;
     int depth = 0;
@@ -386,12 +466,13 @@ vec3 trace(vec3 origin, vec3 dir, vec3 sun_dir, vec3 sun_color, vec3 ambient) {
         float hit_t = 0.0;
         vec3 hit_pos = vec3(0.0);
         vec3 hit_normal = vec3(0.0, 1.0, 0.0);
-        int index = closest_hit_index(origin, dir, T_MIN, T_MAX, hit_t, hit_pos, hit_normal);
+        int index = closest_hit_index(origin, dir, T_MIN, T_MAX, sun_position, hit_t, hit_pos, hit_normal);
         if (index < 0) {
             color += ambient * throughput;
             break;
         }
-        color += shade(hit_pos, hit_normal, index, sun_dir, sun_color, ambient) * throughput;
+        float shadow = soft_shadow_factor(hit_pos, sun_position);
+        color += shade(hit_pos, hit_normal, index, sun_position, sun_color, ambient, shadow) * throughput;
         float spec = material_specular(index);
         if (depth >= MAX_BOUNCES || spec <= EPS) { break; }
         throughput *= spec;
@@ -411,12 +492,17 @@ void main() {
     vec3 sun_color = u_params[5].rgb;
     vec3 ambient = u_params[6].rgb;
     vec2 resolution = u_params[7].xy;
+    // SUN_DIR above is used to derive the sun sphere position and the
+    // shadow-ray target (`sun_dir * SUN_DISTANCE`). The visual sun
+    // sphere centre and the floor's lit pool therefore share the same
+    // source vector — rotating the camera no longer detaches them.
     float aspect = resolution.x / resolution.y;
     float base_x = floor(gl_FragCoord.x);
     // gl_FragCoord is bottom-up; the CPU path scans top-down, which
     // flips ndc_y. Sampling bottom-up directly yields the same set of
     // sub-sample NDC values.
     float base_y = floor(gl_FragCoord.y);
+    vec3 sun_position = sun_dir * SUN_DISTANCE;
     vec3 acc = vec3(0.0);
     for (int sy = 0; sy < 2; sy++) {
         for (int sx = 0; sx < 2; sx++) {
@@ -425,7 +511,7 @@ void main() {
             float ndc_x = (px / resolution.x) * 2.0 - 1.0;
             float ndc_y = (py / resolution.y) * 2.0 - 1.0;
             vec3 dir = normalize(forward + right * (ndc_x * aspect) + up * ndc_y);
-            acc += trace(eye, dir, sun_dir, sun_color, ambient);
+            acc += trace(eye, dir, sun_position, sun_color, ambient);
         }
     }
     vec3 linear = acc * 0.25;
@@ -455,7 +541,20 @@ struct SceneUniforms {
     resolution: vec4<f32>,
 };
 
+struct SpherePack {
+    center_radius: vec4<f32>,
+};
+
 @group(0) @binding(0) var<uniform> u_scene: SceneUniforms;
+@group(0) @binding(1) var<uniform> u_sphere_packs: array<SpherePack, 4>;
+
+fn sphere_pack_center(idx: i32) -> vec3<f32> {
+    return u_sphere_packs[idx].center_radius.xyz;
+}
+
+fn sphere_pack_radius(idx: i32) -> f32 {
+    return u_sphere_packs[idx].center_radius.w;
+}
 
 // Mirrors the engine's pub(crate) RAYTRACE_DEFAULT_MAX_BOUNCES.
 const MAX_BOUNCES: i32 = 4;
@@ -472,15 +571,10 @@ const MIRROR_CENTER = vec3<f32>(0.0, 0.4, 0.0);
 const MIRROR_RADIUS: f32 = 0.9;
 const EMISSIVE_CENTER = vec3<f32>(1.6, 0.6, -1.4);
 const EMISSIVE_RADIUS: f32 = 0.45;
-// Sun sphere: positioned at the OPPOSITE direction of the directional
-// sun at yaw=0 (`raytrace_sun_direction(0.0)` = `vec3(-1, -0.5, 0)`
-// normalized = `vec3(-0.894, -0.447, 0)`), 8 units out from origin, so
-// the camera always sees the directional light source as a tangible
-// object. The position is intentionally static — the sun direction
-// rotates with yaw, but pinning the sphere at the yaw=0 position keeps
-// it in view as the user orbits and prevents the bouncing reflections
-// from losing their anchor.
-const SUN_CENTER = vec3<f32>(7.155, 3.578, 0.0);
+// Sun sphere: positioned along the sun direction at SUN_DISTANCE so the
+// visible disk and the floor's lit pool share a single source of truth.
+// Replaces the previous yaw=0-only placement.
+const SUN_DISTANCE: f32 = 8.0;
 const SUN_RADIUS: f32 = 0.5;
 
 struct HitResult {
@@ -563,7 +657,7 @@ fn aabb_t(origin: vec3<f32>, dir: vec3<f32>, bmin: vec3<f32>, bmax: vec3<f32>, n
 // 0 = ground AABB, 1 = mirror sphere, 2 = emissive sphere, 3 = sun
 // sphere. `index` is -1 on miss. Ties keep the earliest occluder,
 // matching the engine.
-fn closest_hit_index(origin: vec3<f32>, dir: vec3<f32>) -> HitResult {
+fn closest_hit_index(origin: vec3<f32>, dir: vec3<f32>, sun_dir: vec3<f32>) -> HitResult {
     var best: HitResult;
     best.t = 0.0;
     best.index = -1;
@@ -591,7 +685,7 @@ fn closest_hit_index(origin: vec3<f32>, dir: vec3<f32>) -> HitResult {
         best.position = origin + dir * t;
         best.normal = candidate_normal;
     }
-    t = sphere_t(origin, dir, SUN_CENTER, SUN_RADIUS, &candidate_normal);
+    t = sphere_t(origin, dir, sun_dir * SUN_DISTANCE, SUN_RADIUS, &candidate_normal);
     if t >= T_MIN && t <= T_MAX && (best.index < 0 || t < best.t) {
         best.index = 3;
         best.t = t;
@@ -601,48 +695,94 @@ fn closest_hit_index(origin: vec3<f32>, dir: vec3<f32>) -> HitResult {
     return best;
 }
 
-// Mirrors engine `LightingUniforms::shade` for the single directional
-// sun: ambient + Lambert diffuse + Phong specular + emissive, shadow
-// unconditionally 1.0 for directional lights, specular intensity
-// unchanged because the sun's falloff is 0.0.
-fn shade(position: vec3<f32>, normal: vec3<f32>, index: i32) -> vec3<f32> {
+// Mirrors engine `LightingUniforms::shade` for the positional sun:
+// ambient + Lambert diffuse + Phong specular + emissive. The sun is a
+// point light at `sun_position` so the engine's `soft_shadow_factor`
+// evaluates occlusion and the resulting `shadow` factor attenuates
+// both diffuse and specular contributions. Falloff is 0 (set by
+// `build_raytrace_lighting`) so the sun reads as a distant source and
+// the floor stays uniformly lit wherever the shadow rays reach it.
+fn shade(position: vec3<f32>, normal: vec3<f32>, index: i32, sun_position: vec3<f32>, shadow: f32) -> vec3<f32> {
     let to_eye = SHADE_EYE - position;
     let view_dist = length(to_eye);
     var view_dir = vec3<f32>(0.0);
     if view_dist > EPS {
         view_dir = to_eye / view_dist;
     }
-    let sun_dir = u_scene.sun_dir.xyz;
     let sun_color = u_scene.sun_color.rgb;
+    let to_light = sun_position - position;
+    let light_dist = length(to_light);
+    var light_dir = vec3<f32>(0.0);
+    if light_dist > EPS {
+        light_dir = to_light / light_dist;
+    }
     let albedo = material_albedo(index);
-    let cos_term = max(dot(normal, sun_dir), 0.0);
-    let diffuse = sun_color * (cos_term * albedo);
+    let cos_term = max(dot(normal, light_dir), 0.0);
+    let diffuse = sun_color * (cos_term * shadow * albedo);
     let specular = material_specular(index);
     var spec = vec3<f32>(0.0);
     if specular > 0.0 {
-        let reflect_dir = normalize(sun_dir - normal * (2.0 * dot(sun_dir, normal)));
+        let reflect_dir = normalize(light_dir - normal * (2.0 * dot(light_dir, normal)));
         let spec_factor = pow(max(dot(reflect_dir, view_dir), 0.0), material_shininess(index));
-        spec = sun_color * (spec_factor * specular);
+        spec = sun_color * (spec_factor * specular * shadow);
     }
     return u_scene.ambient.rgb + diffuse + spec + material_emissive(index);
+}
+
+// Mirrors engine `soft_shadow_factor`: 1.0 if no occluder blocks the
+// path from `origin` toward `light_pos`, otherwise 0.0. The bounding
+// spheres `(center, radius)` are precomputed once per frame in
+// `RayTraceScene::new` and packed into `u_sphere_packs`; this stays
+// binary (no penumbra sampling) to mirror the engine exactly.
+fn occluder_shadow_sphere(origin: vec3<f32>, light_pos: vec3<f32>, center: vec3<f32>, radius: f32, dist_to_light: f32) -> f32 {
+    var dir = vec3<f32>(0.0);
+    if dist_to_light > EPS {
+        dir = (light_pos - origin) / dist_to_light;
+    }
+    let oc = origin - center;
+    let b = dot(oc, dir);
+    let c = dot(oc, oc) - radius * radius;
+    let disc = b * b - c;
+    if disc < 0.0 { return 1.0; }
+    let sq = sqrt(disc);
+    let t1 = -b - sq;
+    let t2 = -b + sq;
+    var t = t1;
+    if t1 < 0.0 {
+        t = t2;
+    }
+    if t < 0.0 || t >= dist_to_light - EPS { return 1.0; }
+    return 0.0;
+}
+
+fn soft_shadow_factor(origin: vec3<f32>, light_pos: vec3<f32>) -> f32 {
+    let dist_to_light = length(light_pos - origin);
+    var shadow: f32 = 1.0;
+    shadow *= occluder_shadow_sphere(origin, light_pos, sphere_pack_center(0), sphere_pack_radius(0), dist_to_light);
+    shadow *= occluder_shadow_sphere(origin, light_pos, sphere_pack_center(1), sphere_pack_radius(1), dist_to_light);
+    shadow *= occluder_shadow_sphere(origin, light_pos, sphere_pack_center(2), sphere_pack_radius(2), dist_to_light);
+    shadow *= occluder_shadow_sphere(origin, light_pos, sphere_pack_center(3), sphere_pack_radius(3), dist_to_light);
+    return shadow;
 }
 
 // Mirrors engine `trace_bounces`: throughput-weighted iterative
 // reflection with at most MAX_BOUNCES bounces; a miss adds the ambient
 // color scaled by the current throughput.
-fn trace(origin_arg: vec3<f32>, dir_arg: vec3<f32>) -> vec3<f32> {
+fn trace(origin_arg: vec3<f32>, dir_arg: vec3<f32>, sun_dir: vec3<f32>) -> vec3<f32> {
     var color = vec3<f32>(0.0);
     var throughput = 1.0;
     var origin = origin_arg;
     var dir = dir_arg;
     var depth = 0;
+    let sun_position = sun_dir * SUN_DISTANCE;
     for (var bounce = 0; bounce <= MAX_BOUNCES; bounce++) {
-        let hit = closest_hit_index(origin, dir);
+        let hit = closest_hit_index(origin, dir, sun_dir);
         if hit.index < 0 {
             color += u_scene.ambient.rgb * throughput;
             break;
         }
-        color += shade(hit.position, hit.normal, hit.index) * throughput;
+        let shadow = soft_shadow_factor(hit.position, sun_position);
+        color += shade(hit.position, hit.normal, hit.index, sun_position, shadow) * throughput;
         let spec = material_specular(hit.index);
         if depth >= MAX_BOUNCES || spec <= EPS { break; }
         throughput *= spec;
@@ -655,7 +795,7 @@ fn trace(origin_arg: vec3<f32>, dir_arg: vec3<f32>) -> vec3<f32> {
 
 @vertex
 fn vs_main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
-    var positions = array<vec2<f32>, 3>(
+    var positions = array<vec2<f32>, 3> (
         vec2<f32>(-1.0, -1.0),
         vec2<f32>(3.0, -1.0),
         vec2<f32>(-1.0, 3.0),
@@ -669,6 +809,7 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>) -> @location(0) vec4<f32> {
     let forward = u_scene.camera_forward.xyz;
     let right = u_scene.camera_right.xyz;
     let up = u_scene.camera_up.xyz;
+    let sun_dir = u_scene.sun_dir.xyz;
     let resolution = u_scene.resolution.xy;
     let aspect = resolution.x / resolution.y;
     // WebGPU fragment positions are top-left origin, matching the CPU
@@ -683,11 +824,11 @@ fn fs_main(@builtin(position) frag_pos: vec4<f32>) -> @location(0) vec4<f32> {
             let ndc_x = (px / resolution.x) * 2.0 - 1.0;
             let ndc_y = 1.0 - (py / resolution.y) * 2.0;
             let dir = normalize(forward + right * (ndc_x * aspect) + up * ndc_y);
-            acc += trace(eye, dir);
+            acc += trace(eye, dir, sun_dir);
         }
     }
     let linear = acc * 0.25;
-    let gamma = pow(clamp(linear, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(1.0 / 2.2));
+    let gamma = pow(clamp(linear, vec3<f32>(0.0), vec3<f32>(1.0)), vec3(1.0 / 2.2));
     return vec4<f32>(gamma, 1.0);
 }
 "#;

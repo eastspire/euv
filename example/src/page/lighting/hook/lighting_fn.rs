@@ -436,14 +436,24 @@ pub(crate) fn start_lighting_loop(state: UseLighting) {
     // frame, but synchronous WASM module init can delay it further on
     // slow devices, and without this paint the canvas stays blank /
     // half-rendered for that entire window.
-    let Some(loading_window): Option<Window> = window() else { return; };
-    let loading_closure: Closure<dyn FnMut()> = Closure::wrap(Box::new(move || {
-        draw_game_3d_loading(LIGHTING_LOADING_CANVAS_SELECTOR, LIGHTING_CANVAS_SELECTOR);
-    }));
-    let loading_callback: Function = loading_closure.as_ref().unchecked_ref::<Function>().clone();
-    loading_closure.forget();
-    let _ =
-        loading_window.set_timeout_with_callback_and_timeout_and_arguments_0(&loading_callback, 0);
+    // A missing `window()` must never abort `start_lighting_loop`: the
+    // overlay paint is a cosmetic best-effort step, whereas the code
+    // below it registers the `use_cleanup` handler and flips
+    // `loop_started`. Returning early here (the previous `let ... else`
+    // form) skipped both, so the tab stayed pinned on "Initializing..."
+    // forever because `loop_started` was never set and the loop was
+    // therefore never restarted. Scoping the paint in an `if let` keeps
+    // the loop start unconditional.
+    if let Some(loading_window) = window() {
+        let loading_closure: Closure<dyn FnMut()> = Closure::wrap(Box::new(move || {
+            draw_game_3d_loading(LIGHTING_LOADING_CANVAS_SELECTOR, LIGHTING_CANVAS_SELECTOR);
+        }));
+        let loading_callback: Function =
+            loading_closure.as_ref().unchecked_ref::<Function>().clone();
+        loading_closure.forget();
+        let _ = loading_window
+            .set_timeout_with_callback_and_timeout_and_arguments_0(&loading_callback, 0);
+    }
     let raf_closure: Closure<dyn FnMut()> = Closure::wrap(Box::new(move || {
         if lighting_canvas_detached(LIGHTING_CANVAS_SELECTOR) {
             return;
