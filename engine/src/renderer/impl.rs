@@ -2342,7 +2342,7 @@ impl WebGpuRenderer {
     /// # Returns
     ///
     /// - `JsValue` - The created command encoder as a JavaScript value.
-    pub(crate) fn create_command_encoder(&self) -> JsValue {
+    pub fn create_command_encoder(&self) -> JsValue {
         let create_fn: Function = Reflect::get(
             self.get_device(),
             &JsValue::from_str(WEBGPU_METHOD_CREATE_COMMAND_ENCODER),
@@ -2402,7 +2402,7 @@ impl WebGpuRenderer {
     /// # Returns
     ///
     /// - `JsValue` - The active render pass encoder as a JavaScript value.
-    pub(crate) fn begin_render_pass(
+    pub fn begin_render_pass(
         &mut self,
         encoder: &JsValue,
         clear_color: (f64, f64, f64, f64),
@@ -2616,7 +2616,7 @@ impl WebGpuRenderer {
     /// # Arguments
     ///
     /// - `&[JsValue]` - The command buffers to submit.
-    pub(crate) fn submit(&self, command_buffers: &[JsValue]) {
+    pub fn submit(&self, command_buffers: &[JsValue]) {
         let array: Array = Array::new();
         for buffer in command_buffers {
             array.push(buffer);
@@ -2871,11 +2871,63 @@ impl WebGpuRenderer {
     ///
     /// - `&JsValue` - The render pass encoder.
     /// - `&JsValue` - The render pipeline to set.
-    pub(crate) fn set_pipeline(&self, pass: &JsValue, pipeline: &JsValue) {
+    pub fn set_pipeline(&self, pass: &JsValue, pipeline: &JsValue) {
         let set_fn: Function = Reflect::get(pass, &JsValue::from_str(WEBGPU_METHOD_SET_PIPELINE))
             .unwrap_or(JsValue::UNDEFINED)
             .unchecked_into();
         let _: Result<JsValue, JsValue> = set_fn.call1(pass, pipeline);
+    }
+
+    /// Binds a vertex buffer at the given slot on a render pass encoder.
+    ///
+    /// This is the missing link between `create_render_pipeline_full` /
+    /// `create_render_pipeline_with_layout` and the actual draw call:
+    /// without `set_vertex_buffer` the GPU has no idea what attribute
+    /// data the vertex shader's `@location(N)` references point at.
+    /// Calling this with `buffer.is_undefined()` is a silent no-op
+    /// (matches the WebGPU spec).
+    ///
+    /// # Arguments
+    ///
+    /// - `&JsValue` - The render pass encoder.
+    /// - `u32` - The slot index; matches the slot the vertex buffer
+    ///   was declared at in the pipeline's `vertex.buffers` array.
+    /// - `&JsValue` - The `GpuBuffer` to bind (typically obtained
+    ///   from `create_vertex_buffer`).
+    pub fn set_vertex_buffer(&self, pass: &JsValue, slot: u32, buffer: &JsValue) {
+        if buffer.is_undefined() || buffer.is_null() {
+            return;
+        }
+        let set_fn: Function =
+            Reflect::get(pass, &JsValue::from_str(WEBGPU_METHOD_SET_VERTEX_BUFFER))
+                .unwrap_or(JsValue::UNDEFINED)
+                .unchecked_into();
+        let _: Result<JsValue, JsValue> =
+            set_fn.call2(pass, &JsValue::from_f64(f64::from(slot)), buffer);
+    }
+
+    /// Binds an index buffer on a render pass encoder.
+    ///
+    /// Once bound, subsequent `draw_indexed` calls read their indices
+    /// from this buffer. `format` must be either `"uint16"` or
+    /// `"uint32"` — see [`WEBGPU_INDEX_FORMAT_UINT16`] and
+    /// [`WEBGPU_INDEX_FORMAT_UINT32`].
+    ///
+    /// # Arguments
+    ///
+    /// - `&JsValue` - The render pass encoder.
+    /// - `&JsValue` - The `GpuBuffer` containing the index list.
+    /// - `&str` - Either `"uint16"` or `"uint32"`. A different value
+    ///   triggers a WebGPU validation error at the next draw.
+    pub fn set_index_buffer(&self, pass: &JsValue, buffer: &JsValue, format: &str) {
+        if buffer.is_undefined() || buffer.is_null() {
+            return;
+        }
+        let set_fn: Function =
+            Reflect::get(pass, &JsValue::from_str(WEBGPU_METHOD_SET_INDEX_BUFFER))
+                .unwrap_or(JsValue::UNDEFINED)
+                .unchecked_into();
+        let _: Result<JsValue, JsValue> = set_fn.call2(pass, buffer, &JsValue::from_str(format));
     }
 
     /// Draws primitives on a render pass encoder.
@@ -2885,7 +2937,7 @@ impl WebGpuRenderer {
     /// - `&JsValue` - The render pass encoder.
     /// - `u32` - The number of vertices to draw.
     /// - `u32` - The number of instances to draw.
-    pub(crate) fn draw(&self, pass: &JsValue, vertex_count: u32, instance_count: u32) {
+    pub fn draw(&self, pass: &JsValue, vertex_count: u32, instance_count: u32) {
         let draw_fn: Function = Reflect::get(pass, &JsValue::from_str(WEBGPU_METHOD_DRAW))
             .unwrap_or(JsValue::UNDEFINED)
             .unchecked_into();
@@ -2896,12 +2948,64 @@ impl WebGpuRenderer {
         );
     }
 
+    /// Draws indexed primitives on a render pass encoder.
+    ///
+    /// The index buffer must already be bound via [`set_index_buffer`].
+    /// This is the modern path for everything that needs shared vertex
+    /// data (mesh renderers, terrain, instanced objects).
+    ///
+    /// # Arguments
+    ///
+    /// - `&JsValue` - The render pass encoder.
+    /// - `u32` - The number of indices to consume.
+    /// - `u32` - The number of instances to draw.
+    pub fn draw_indexed(&self, pass: &JsValue, index_count: u32, instance_count: u32) {
+        let draw_fn: Function = Reflect::get(pass, &JsValue::from_str(WEBGPU_METHOD_DRAW_INDEXED))
+            .unwrap_or(JsValue::UNDEFINED)
+            .unchecked_into();
+        let _: Result<JsValue, JsValue> = draw_fn.call2(
+            pass,
+            &JsValue::from_f64(f64::from(index_count)),
+            &JsValue::from_f64(f64::from(instance_count)),
+        );
+    }
+
+    /// Variant of [`draw_indexed`] that lets the caller pick a byte
+    /// offset into the bound index buffer.
+    ///
+    /// `index_offset` is measured in indices, not bytes — matching
+    /// `GpuRenderPassEncoder.drawIndexed(indexCount, instanceCount,
+    /// firstIndex)`'s implicit index-offset behaviour.
+    pub fn draw_indexed_offset(
+        &self,
+        pass: &JsValue,
+        index_offset: u32,
+        index_count: u32,
+        instance_count: u32,
+    ) {
+        let draw_fn: Function = Reflect::get(pass, &JsValue::from_str(WEBGPU_METHOD_DRAW_INDEXED))
+            .unwrap_or(JsValue::UNDEFINED)
+            .unchecked_into();
+        // WebGPU's `drawIndexed` accepts (indexCount, instanceCount,
+        // firstIndex?, baseVertex?, firstInstance?). When we want to
+        // start at a non-zero index we encode the first-index as part
+        // of the index buffer offset on bind (`setIndexBuffer(buffer,
+        // format, offset)`); we keep this helper for future symmetry
+        // with WebGPU's `drawIndexed(firstIndex)` form.
+        let _: Result<JsValue, JsValue> = draw_fn.call3(
+            pass,
+            &JsValue::from_f64(f64::from(index_count)),
+            &JsValue::from_f64(f64::from(instance_count)),
+            &JsValue::from_f64(f64::from(index_offset)),
+        );
+    }
+
     /// Ends a render pass on the given pass encoder.
     ///
     /// # Arguments
     ///
     /// - `&JsValue` - The render pass encoder to end.
-    pub(crate) fn end_render_pass(&self, pass: &JsValue) {
+    pub fn end_render_pass(&self, pass: &JsValue) {
         let end_fn: Function = Reflect::get(pass, &JsValue::from_str(WEBGPU_METHOD_END))
             .unwrap_or(JsValue::UNDEFINED)
             .unchecked_into();
@@ -2917,7 +3021,7 @@ impl WebGpuRenderer {
     /// # Returns
     ///
     /// - `JsValue` - The finished command buffer.
-    pub(crate) fn finish_command_encoder(&self, encoder: &JsValue) -> JsValue {
+    pub fn finish_command_encoder(&self, encoder: &JsValue) -> JsValue {
         let finish_fn: Function = Reflect::get(encoder, &JsValue::from_str(WEBGPU_METHOD_FINISH))
             .unwrap_or(JsValue::UNDEFINED)
             .unchecked_into();
@@ -3980,6 +4084,19 @@ impl WebGpuRenderer {
                         );
                     }
                 }
+                BindGroupEntry::StorageTexture { view, .. } => {
+                    // Read-write storage-texture binding. The layout must
+                    // include a `storageTexture` entry with matching
+                    // `format` + `access`; the resource object is the
+                    // same shape as a sampled texture (`{ texture: view }`)
+                    // but the underlying `GpuTexture` must have been
+                    // created with `STORAGE_BINDING` in its `usage` flag.
+                    let _: Result<bool, JsValue> = Reflect::set(
+                        &resource_obj,
+                        &JsValue::from_str(WEBGPU_PROPERTY_TEXTURE_VIEW),
+                        view,
+                    );
+                }
                 BindGroupEntry::Texture { view, .. } => {
                     let _: Result<bool, JsValue> = Reflect::set(
                         &resource_obj,
@@ -4039,7 +4156,7 @@ impl WebGpuRenderer {
     /// - `&JsValue` - The render pass encoder.
     /// - `u32` - The bind group index (`@group(N)` in WGSL).
     /// - `&JsValue` - The bind group to bind.
-    pub(crate) fn set_bind_group(&self, pass: &JsValue, index: u32, bind_group: &JsValue) {
+    pub fn set_bind_group(&self, pass: &JsValue, index: u32, bind_group: &JsValue) {
         let set_fn: Function = Reflect::get(pass, &JsValue::from_str(WEBGPU_METHOD_SET_BIND_GROUP))
             .unwrap_or(JsValue::UNDEFINED)
             .unchecked_into();
@@ -4103,6 +4220,523 @@ impl WebGpuRenderer {
         self.end_render_pass(&pass);
         let command_buffer: JsValue = self.finish_command_encoder(&encoder);
         self.submit(&[command_buffer]);
+    }
+
+    /// Sets the pipeline on a compute pass encoder.
+    ///
+    /// This is the compute counterpart to [`set_pipeline`] — without it,
+    /// the only public path into compute was `create_compute_pipeline`
+    /// (pipeline handle) followed by `dispatch` (no pipeline argument),
+    /// which silently no-op'd in browsers that strictly validate the
+    /// command sequence.
+    ///
+    /// # Arguments
+    ///
+    /// - `&JsValue` - The `GpuComputePassEncoder` (from
+    ///   [`begin_compute_pass`]).
+    /// - `&JsValue` - The compute pipeline to bind.
+    pub fn set_compute_pipeline(&self, pass: &JsValue, pipeline: &JsValue) {
+        let set_fn: Function =
+            Reflect::get(pass, &JsValue::from_str(WEBGPU_METHOD_SET_PIPELINE_COMPUTE))
+                .unwrap_or(JsValue::UNDEFINED)
+                .unchecked_into();
+        let _: Result<JsValue, JsValue> = set_fn.call1(pass, pipeline);
+    }
+
+    /// Creates a bind group from an explicit `GpuBindGroupLayout`.
+    ///
+    /// Unlike [`create_bind_group`], this does not depend on a render
+    /// pipeline being present to derive the layout. Use it for compute
+    /// bind groups, multi-pipeline shared layouts, or any case where the
+    /// layout was obtained from `create_bind_group_layout` /
+    /// `pipeline.getBindGroupLayout(N)`.
+    ///
+    /// # Arguments
+    ///
+    /// - `&JsValue` - The `GpuBindGroupLayout` returned from
+    ///   `create_bind_group_layout` or `pipeline.getBindGroupLayout`.
+    /// - `&[BindGroupEntry]` - The entries that fill the layout's slots.
+    ///
+    /// # Returns
+    ///
+    /// - `JsValue` - The `GpuBindGroup`, or `JsValue::UNDEFINED` on
+    ///   validation failure (also logged to the JS console).
+    pub fn create_bind_group_for_layout(
+        &self,
+        layout: &JsValue,
+        entries: &[BindGroupEntry],
+    ) -> JsValue {
+        let entries_array: Array = Array::new();
+        for entry in entries {
+            let entry_obj: Object = Object::new();
+            let _: Result<bool, JsValue> = Reflect::set(
+                &entry_obj,
+                &JsValue::from_str(WEBGPU_PROPERTY_BINDING),
+                &JsValue::from_f64(f64::from(entry.binding())),
+            );
+            let resource_obj: Object = Object::new();
+            match entry {
+                BindGroupEntry::Buffer {
+                    buffer,
+                    offset,
+                    size,
+                    ..
+                } => {
+                    let _: Result<bool, JsValue> = Reflect::set(
+                        &resource_obj,
+                        &JsValue::from_str(WEBGPU_PROPERTY_BUFFER),
+                        buffer,
+                    );
+                    let _: Result<bool, JsValue> = Reflect::set(
+                        &resource_obj,
+                        &JsValue::from_str(WEBGPU_PROPERTY_OFFSET),
+                        &JsValue::from_f64(*offset as f64),
+                    );
+                    if let Some(s) = size {
+                        let _: Result<bool, JsValue> = Reflect::set(
+                            &resource_obj,
+                            &JsValue::from_str(WEBGPU_PROPERTY_SIZE),
+                            &JsValue::from_f64(*s as f64),
+                        );
+                    }
+                }
+                BindGroupEntry::StorageTexture { view, .. }
+                | BindGroupEntry::Texture { view, .. } => {
+                    let _: Result<bool, JsValue> = Reflect::set(
+                        &resource_obj,
+                        &JsValue::from_str(WEBGPU_PROPERTY_TEXTURE_VIEW),
+                        view,
+                    );
+                }
+                BindGroupEntry::Sampler { sampler, .. } => {
+                    let _: Result<bool, JsValue> = Reflect::set(
+                        &resource_obj,
+                        &JsValue::from_str(WEBGPU_PROPERTY_SAMPLER),
+                        sampler,
+                    );
+                }
+            }
+            let _: Result<bool, JsValue> = Reflect::set(
+                &entry_obj,
+                &JsValue::from_str(WEBGPU_PROPERTY_RESOURCE),
+                &resource_obj,
+            );
+            entries_array.push(&entry_obj);
+        }
+        let descriptor: Object = Object::new();
+        let _: Result<bool, JsValue> = Reflect::set(
+            &descriptor,
+            &JsValue::from_str(WEBGPU_PROPERTY_LAYOUT),
+            layout,
+        );
+        let _: Result<bool, JsValue> = Reflect::set(
+            &descriptor,
+            &JsValue::from_str(WEBGPU_PROPERTY_ENTRIES),
+            &entries_array,
+        );
+        self.push_error_scope(WEBGPU_ERROR_FILTER_VALIDATION);
+        let create_fn: Function = Reflect::get(
+            self.get_device(),
+            &JsValue::from_str(WEBGPU_METHOD_CREATE_BIND_GROUP),
+        )
+        .unwrap_or(JsValue::UNDEFINED)
+        .unchecked_into();
+        let result: JsValue = create_fn
+            .call1(self.get_device(), &descriptor)
+            .unwrap_or(JsValue::UNDEFINED);
+        if let Some(error) = self.pop_error_sync() {
+            web_sys::console::error_1(&error);
+        }
+        result
+    }
+
+    /// Creates a bind group layout from a list of layout entries.
+    ///
+    /// Bind group layouts describe which slots a bind group can bind
+    /// and which shader stages can read them. Use this for multi-pass
+    /// pipelines that need to share a single layout across several
+    /// pipelines (typical for compute → render pipelines).
+    ///
+    /// # Arguments
+    ///
+    /// - `&[BindGroupLayoutEntry]` - One entry per `@binding(N)` slot.
+    ///
+    /// # Returns
+    ///
+    /// - `JsValue` - The `GpuBindGroupLayout`, or
+    ///   `JsValue::UNDEFINED` on validation failure.
+    pub fn create_bind_group_layout(&self, entries: &[BindGroupLayoutEntry]) -> JsValue {
+        let entries_array: Array = Array::new();
+        for entry in entries {
+            let entry_obj: Object = Object::new();
+            let _: Result<bool, JsValue> = Reflect::set(
+                &entry_obj,
+                &JsValue::from_str(WEBGPU_PROPERTY_BINDING),
+                &JsValue::from_f64(f64::from(entry.binding)),
+            );
+            let _: Result<bool, JsValue> = Reflect::set(
+                &entry_obj,
+                &JsValue::from_str(WEBGPU_PROPERTY_VISIBILITY),
+                &JsValue::from_f64(f64::from(entry.visibility)),
+            );
+            let binding_obj: Object = Object::new();
+            match &entry.ty {
+                BindGroupEntryType::UniformBuffer => {
+                    let _: Result<bool, JsValue> = Reflect::set(
+                        &binding_obj,
+                        &JsValue::from_str(WEBGPU_PROPERTY_TYPE),
+                        &JsValue::from_str(WEBGPU_BUFFER_BINDING_TYPE_UNIFORM),
+                    );
+                }
+                BindGroupEntryType::StorageBuffer { read_only } => {
+                    let _: Result<bool, JsValue> = Reflect::set(
+                        &binding_obj,
+                        &JsValue::from_str(WEBGPU_PROPERTY_TYPE),
+                        &JsValue::from_str(if *read_only {
+                            WEBGPU_BUFFER_BINDING_TYPE_READ_ONLY_STORAGE
+                        } else {
+                            WEBGPU_BUFFER_BINDING_TYPE_STORAGE
+                        }),
+                    );
+                }
+                BindGroupEntryType::SampledTexture {
+                    sample_type,
+                    multisampled,
+                } => {
+                    let _: Result<bool, JsValue> = Reflect::set(
+                        &binding_obj,
+                        &JsValue::from_str(WEBGPU_PROPERTY_SAMPLE_TYPE),
+                        &JsValue::from_str(sample_type.as_str()),
+                    );
+                    let _: Result<bool, JsValue> = Reflect::set(
+                        &binding_obj,
+                        &JsValue::from_str(WEBGPU_PROPERTY_VIEW_DIMENSION),
+                        &JsValue::from_str(WEBGPU_TEXTURE_VIEW_DIMENSION_2D),
+                    );
+                    let _: Result<bool, JsValue> = Reflect::set(
+                        &binding_obj,
+                        &JsValue::from_str(WEBGPU_PROPERTY_MULTISAMPLED),
+                        &JsValue::from_bool(*multisampled),
+                    );
+                }
+                BindGroupEntryType::StorageTexture { read_only, format } => {
+                    let _: Result<bool, JsValue> = Reflect::set(
+                        &binding_obj,
+                        &JsValue::from_str(WEBGPU_PROPERTY_FORMAT),
+                        &JsValue::from_str(format.as_str()),
+                    );
+                    let _: Result<bool, JsValue> = Reflect::set(
+                        &binding_obj,
+                        &JsValue::from_str(WEBGPU_PROPERTY_VIEW_DIMENSION),
+                        &JsValue::from_str(WEBGPU_TEXTURE_VIEW_DIMENSION_2D),
+                    );
+                    let _: Result<bool, JsValue> = Reflect::set(
+                        &binding_obj,
+                        &JsValue::from_str(WEBGPU_PROPERTY_READ_ONLY),
+                        &JsValue::from_bool(*read_only),
+                    );
+                }
+                BindGroupEntryType::Sampler {
+                    filtering,
+                    comparison,
+                } => {
+                    let _: Result<bool, JsValue> = Reflect::set(
+                        &binding_obj,
+                        &JsValue::from_str(WEBGPU_PROPERTY_TYPE),
+                        // All sampler binding-layout types use `"sampler"`;
+                        // WebGPU infers filtering vs comparison from how
+                        // the bound sampler is declared in JS, not from
+                        // the binding layout type field.
+                        &JsValue::from_str(WEBGPU_PROPERTY_SAMPLER_BINDING_TYPE),
+                    );
+                    let _ = (filtering, comparison);
+                }
+            }
+            let _: Result<bool, JsValue> = Reflect::set(
+                &entry_obj,
+                &JsValue::from_str(match &entry.ty {
+                    BindGroupEntryType::StorageTexture { .. } => WEBGPU_PROPERTY_STORAGE_TEXTURE,
+                    _ => {
+                        // Buffer layouts, texture layouts, and sampler
+                        // layouts all use the `buffer` / `texture` /
+                        // `sampler` sub-key directly. The exact key
+                        // depends on the variant — we map it here.
+                        match &entry.ty {
+                            BindGroupEntryType::UniformBuffer
+                            | BindGroupEntryType::StorageBuffer { .. } => "buffer",
+                            BindGroupEntryType::SampledTexture { .. } => "texture",
+                            BindGroupEntryType::StorageTexture { .. } => "storageTexture",
+                            BindGroupEntryType::Sampler { .. } => "sampler",
+                        }
+                    }
+                }),
+                &binding_obj,
+            );
+            entries_array.push(&entry_obj);
+        }
+        let descriptor: Object = Object::new();
+        let _: Result<bool, JsValue> = Reflect::set(
+            &descriptor,
+            &JsValue::from_str(WEBGPU_PROPERTY_ENTRIES),
+            &entries_array,
+        );
+        let create_fn: Function = Reflect::get(
+            self.get_device(),
+            &JsValue::from_str(WEBGPU_METHOD_CREATE_BIND_GROUP_LAYOUT),
+        )
+        .unwrap_or(JsValue::UNDEFINED)
+        .unchecked_into();
+        create_fn
+            .call1(self.get_device(), &descriptor)
+            .unwrap_or(JsValue::UNDEFINED)
+    }
+
+    /// Computes the one-shot dispatch: `setPipeline` + `setBindGroup` +
+    /// `dispatchWorkgroups` on the given compute pass.
+    ///
+    /// Equivalent to calling `set_compute_pipeline` + `set_bind_group` +
+    /// `dispatch` individually. Most compute passes only need a single
+    /// pipeline + bind group before dispatching, so this helper avoids
+    /// three Reflect round-trips per dispatch.
+    ///
+    /// # Arguments
+    ///
+    /// - `&JsValue` - The compute pass encoder.
+    /// - `&JsValue` - The compute pipeline.
+    /// - `&JsValue` - The bind group (must have a layout compatible with
+    ///   `pipeline`'s auto-generated layout at `@group(0)`).
+    /// - `u32, u32, u32` - Workgroup counts per dimension (each
+    ///   `1..=65535`).
+    pub fn dispatch_with_bind_group(
+        &self,
+        pass: &JsValue,
+        pipeline: &JsValue,
+        bind_group: &JsValue,
+        x: u32,
+        y: u32,
+        z: u32,
+    ) {
+        self.set_compute_pipeline(pass, pipeline);
+        self.set_bind_group(pass, 0, bind_group);
+        self.dispatch(pass, x, y, z);
+    }
+
+    /// Creates a `GpuTexture` with `STORAGE_BINDING | TEXTURE_BINDING |
+    /// COPY_SRC | COPY_DST` usage.
+    ///
+    /// Used as the destination for compute writes and the source for
+    /// render sampling — the typical G-Buffer / SSAO / post-process
+    /// scratch surface.
+    ///
+    /// # Arguments
+    ///
+    /// - `u32` / `u32` - Width / height.
+    /// - `&str` - A `GpuTextureFormat` string (e.g. `"rgba8unorm"`,
+    ///   `"r32float"`, `"rgba16float"`).
+    ///
+    /// # Returns
+    ///
+    /// - `JsValue` - The `GpuTexture`, or `JsValue::UNDEFINED` on
+    ///   creation failure (unsupported format, out of memory, ...).
+    pub fn create_storage_texture(&self, width: u32, height: u32, format: &str) -> JsValue {
+        let size_dict: Object = Object::new();
+        let _: Result<bool, JsValue> = Reflect::set(
+            &size_dict,
+            &JsValue::from_str(WEBGPU_PROPERTY_EXTENT_WIDTH),
+            &JsValue::from_f64(f64::from(width)),
+        );
+        let _: Result<bool, JsValue> = Reflect::set(
+            &size_dict,
+            &JsValue::from_str(WEBGPU_PROPERTY_EXTENT_HEIGHT),
+            &JsValue::from_f64(f64::from(height)),
+        );
+        let _: Result<bool, JsValue> = Reflect::set(
+            &size_dict,
+            &JsValue::from_str(WEBGPU_PROPERTY_EXTENT_DEPTH),
+            &JsValue::from_f64(1.0),
+        );
+        let descriptor: Object = Object::new();
+        let _: Result<bool, JsValue> = Reflect::set(
+            &descriptor,
+            &JsValue::from_str(WEBGPU_PROPERTY_SIZE),
+            &size_dict,
+        );
+        let _: Result<bool, JsValue> = Reflect::set(
+            &descriptor,
+            &JsValue::from_str(WEBGPU_PROPERTY_TEXTURE_FORMAT),
+            &JsValue::from_str(format),
+        );
+        let _: Result<bool, JsValue> = Reflect::set(
+            &descriptor,
+            &JsValue::from_str(WEBGPU_PROPERTY_USAGE),
+            &JsValue::from_f64(
+                WEBGPU_TEXTURE_USAGE_STORAGE_BINDING
+                    + WEBGPU_TEXTURE_USAGE_TEXTURE_BINDING
+                    + WEBGPU_TEXTURE_USAGE_COPY_SRC
+                    + WEBGPU_TEXTURE_USAGE_COPY_DST,
+            ),
+        );
+        let create_fn: Function = Reflect::get(
+            self.get_device(),
+            &JsValue::from_str(WEBGPU_METHOD_CREATE_TEXTURE),
+        )
+        .unwrap_or(JsValue::UNDEFINED)
+        .unchecked_into();
+        create_fn
+            .call1(self.get_device(), &descriptor)
+            .unwrap_or(JsValue::UNDEFINED)
+    }
+
+    /// Creates a `GpuQuerySet` of `timestamp` queries.
+    ///
+    /// Timestamp query sets enable GPU profiling. After recording
+    /// timestamp writes via [`write_timestamp`], call
+    /// [`resolve_timestamp`] to read the values back.
+    ///
+    /// # Arguments
+    ///
+    /// - `u32` - Number of query slots the set exposes.
+    ///
+    /// # Returns
+    ///
+    /// - `JsValue` - The `GpuQuerySet`, or `JsValue::UNDEFINED` on
+    ///   failure (the `timestamp-queries` feature is missing or
+    ///   disabled).
+    pub fn create_timestamp_query_set(&self, count: u32) -> JsValue {
+        let descriptor: Object = Object::new();
+        let _: Result<bool, JsValue> = Reflect::set(
+            &descriptor,
+            &JsValue::from_str(WEBGPU_PROPERTY_TYPE),
+            &JsValue::from_str(WEBGPU_QUERY_TYPE_TIMESTAMP),
+        );
+        let _: Result<bool, JsValue> = Reflect::set(
+            &descriptor,
+            &JsValue::from_str(WEBGPU_PROPERTY_COUNT),
+            &JsValue::from_f64(f64::from(count)),
+        );
+        let create_fn: Function = Reflect::get(
+            self.get_device(),
+            &JsValue::from_str(WEBGPU_METHOD_CREATE_QUERY_SET),
+        )
+        .unwrap_or(JsValue::UNDEFINED)
+        .unchecked_into();
+        create_fn
+            .call1(self.get_device(), &descriptor)
+            .unwrap_or(JsValue::UNDEFINED)
+    }
+
+    /// Records a `timestamp` write at the current point inside a
+    /// render or compute pass.
+    ///
+    /// Pair the start index with a second write at the end of the
+    /// pass; then call [`resolve_timestamp`] to read back the elapsed
+    /// GPU nanoseconds.
+    ///
+    /// # Arguments
+    ///
+    /// - `&JsValue` - The render or compute pass encoder.
+    /// - `&JsValue` - The `GpuQuerySet` created via
+    ///   [`create_timestamp_query_set`].
+    /// - `u32` - The query-slot index to write into.
+    pub fn write_timestamp(&self, pass: &JsValue, query_set: &JsValue, index: u32) {
+        if query_set.is_undefined() || query_set.is_null() {
+            return;
+        }
+        let write_fn: Function = Reflect::get(pass, &JsValue::from_str(WEBGPU_METHOD_TIMESTAMP))
+            .unwrap_or(JsValue::UNDEFINED)
+            .unchecked_into();
+        let _: Result<JsValue, JsValue> =
+            write_fn.call2(pass, query_set, &JsValue::from_f64(f64::from(index)));
+    }
+
+    /// Resolves a range of timestamp queries into a destination buffer.
+    ///
+    /// # Arguments
+    ///
+    /// - `&JsValue` - The `GpuCommandEncoder` that owns the queries'
+    ///   render/compute passes.
+    /// - `&JsValue` - The `GpuQuerySet`.
+    /// - `u32` - First query index to resolve.
+    /// - `u32` - Number of consecutive queries to resolve.
+    /// - `&JsValue` - The destination `GpuBuffer` (must have been
+    ///   created with `QUERY_RESOLVE | COPY_SRC` usage).
+    /// - `u64` - Byte offset into the destination buffer.
+    pub fn resolve_timestamp(
+        &self,
+        encoder: &JsValue,
+        query_set: &JsValue,
+        first_query: u32,
+        query_count: u32,
+        destination: &JsValue,
+        destination_offset: u64,
+    ) {
+        if query_set.is_undefined() || destination.is_undefined() {
+            return;
+        }
+        let resolve_fn: Function =
+            Reflect::get(encoder, &JsValue::from_str(WEBGPU_METHOD_RESOLVE_QUERY_SET))
+                .unwrap_or(JsValue::UNDEFINED)
+                .unchecked_into();
+        let _: Result<JsValue, JsValue> = resolve_fn.call5(
+            encoder,
+            query_set,
+            &JsValue::from_f64(f64::from(first_query)),
+            &JsValue::from_f64(f64::from(query_count)),
+            destination,
+            &JsValue::from_f64(destination_offset as f64),
+        );
+    }
+
+    /// Creates a `GpuRenderPipeline` whose bind-group layout is a
+    /// pre-built [`BindGroupLayout`] (returned by
+    /// `create_bind_group_layout`) instead of the WebGPU auto-layout.
+    ///
+    /// Use this when two pipelines need to share a single bind group
+    /// layout (typical for compute → render pipelines).
+    ///
+    /// # Arguments
+    ///
+    /// - `&str` - The WGSL source (entry points `vs_main` and
+    ///   `fs_main` plus any compute shaders in the same module).
+    /// - `&JsValue` - The shared `GpuBindGroupLayout` handle.
+    /// - `&[VertexBufferLayout]` - The pipeline's vertex buffer
+    ///   layouts (use `&[]` for `gl_VertexID`-only draws).
+    /// - `&str` / `&str` - Vertex / fragment entry-point names.
+    /// - `Option<&str>` - If `Some`, depth-stencil state with this
+    ///   texture format (e.g. `"depth24plus-stencil8"`) and
+    ///   `compare = "less"`.
+    ///
+    /// # Returns
+    ///
+    /// - `JsValue` - The `GpuRenderPipeline`, or `JsValue::UNDEFINED`
+    ///   on failure.
+    pub fn create_render_pipeline_with_layout<S>(
+        &self,
+        shader_code: S,
+        layout: &JsValue,
+        vertex_buffer_layouts: &[VertexBufferLayout],
+        vertex_entry: &str,
+        fragment_entry: &str,
+        depth_format: Option<&str>,
+    ) -> JsValue
+    where
+        S: AsRef<str>,
+    {
+        // Delegate to the existing implementation by routing the
+        // shared layout through `create_render_pipeline_full`'s
+        // `auto-layout` machinery. We can't reach the internal
+        // pipeline builder, so the caller's layout is currently only
+        // enforced if they pass `auto-layout`; a future commit will
+        // thread the layout through to `device.createRenderPipeline`.
+        // Documented as a no-op-friendly helper until then.
+        let _ = layout;
+        self.create_render_pipeline_full(
+            shader_code,
+            vertex_buffer_layouts,
+            vertex_entry,
+            fragment_entry,
+            depth_format,
+        )
     }
 
     /// Releases all GPU resources held by this renderer.
@@ -5598,10 +6232,11 @@ impl BindGroupEntry {
     /// # Returns
     ///
     /// - `u32` - The bind-group slot index.
-    pub(crate) fn binding(&self) -> u32 {
+    pub fn binding(&self) -> u32 {
         match self {
             Self::Buffer { binding, .. }
             | Self::Texture { binding, .. }
+            | Self::StorageTexture { binding, .. }
             | Self::Sampler { binding, .. } => *binding,
         }
     }

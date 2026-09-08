@@ -361,6 +361,93 @@ pub(crate) const WEBGPU_METHOD_WRITE_BUFFER: &str = "writeBuffer";
 /// The JavaScript method name `setBindGroup` on `GpuRenderPassEncoder`.
 pub(crate) const WEBGPU_METHOD_SET_BIND_GROUP: &str = "setBindGroup";
 
+/// The JavaScript method name `setBindGroup` on `GpuComputePassEncoder`.
+/// The JavaScript method name `setPipeline` on `GpuComputePassEncoder`.
+pub(crate) const WEBGPU_METHOD_SET_PIPELINE_COMPUTE: &str = "setPipeline";
+
+/// The JavaScript method name `setVertexBuffer(slot, buffer)` on `GpuRenderPassEncoder`.
+pub(crate) const WEBGPU_METHOD_SET_VERTEX_BUFFER: &str = "setVertexBuffer";
+
+/// The JavaScript method name `setIndexBuffer(buffer, format)` on `GpuRenderPassEncoder`.
+pub(crate) const WEBGPU_METHOD_SET_INDEX_BUFFER: &str = "setIndexBuffer";
+
+/// The JavaScript method name `drawIndexed(indexCount)` on `GpuRenderPassEncoder`.
+pub(crate) const WEBGPU_METHOD_DRAW_INDEXED: &str = "drawIndexed";
+
+/// The JavaScript method name `createBindGroupLayout` on `GpuDevice`.
+pub(crate) const WEBGPU_METHOD_CREATE_BIND_GROUP_LAYOUT: &str = "createBindGroupLayout";
+
+/// The JavaScript method name `createQuerySet` on `GpuDevice`.
+pub(crate) const WEBGPU_METHOD_CREATE_QUERY_SET: &str = "createQuerySet";
+
+/// The JavaScript method name `resolveQuerySet` on `GpuCommandEncoder`.
+pub(crate) const WEBGPU_METHOD_RESOLVE_QUERY_SET: &str = "resolveQuerySet";
+
+/// `pass.timestampWrites` operation on render / compute pass encoders.
+pub(crate) const WEBGPU_METHOD_TIMESTAMP: &str = "timestamp";
+
+/// The `indexFormat` property key inside `GpuRenderPipelineDescriptor.primitive`.
+/// The `type` property key inside `GpuBufferBindingLayout`.
+pub(crate) const WEBGPU_PROPERTY_TYPE: &str = "type";
+
+/// The `hasDynamicOffset` property key inside `GpuBufferBindingLayout`.
+/// The `storage` value for `GpuBufferBindingLayout.type` (read-write storage).
+pub(crate) const WEBGPU_BUFFER_BINDING_TYPE_STORAGE: &str = "storage";
+
+/// The `read-only` value for `GpuBufferBindingLayout.type` (read-only storage).
+pub(crate) const WEBGPU_BUFFER_BINDING_TYPE_READ_ONLY_STORAGE: &str = "read-only-storage";
+
+/// The `uniform` value for `GpuBufferBindingLayout.type`.
+pub(crate) const WEBGPU_BUFFER_BINDING_TYPE_UNIFORM: &str = "uniform";
+
+/// The `texture` property key inside `GpuTextureBindingLayout`.
+/// The `sampler` property key inside `GpuSamplerBindingLayout`.
+pub(crate) const WEBGPU_PROPERTY_SAMPLER_BINDING_TYPE: &str = "sampler";
+
+/// The `multisampled` property key inside `GpuTextureBindingLayout`.
+pub(crate) const WEBGPU_PROPERTY_MULTISAMPLED: &str = "multisampled";
+
+/// The `viewDimension` property key inside texture binding layouts.
+pub(crate) const WEBGPU_PROPERTY_VIEW_DIMENSION: &str = "viewDimension";
+
+/// The `sampleType` property key inside `GpuTextureBindingLayout`.
+pub(crate) const WEBGPU_PROPERTY_SAMPLE_TYPE: &str = "sampleType";
+
+/// The `comparison` property key inside `GpuSamplerBindingLayout`.
+/// The `readOnly` property key inside storage-texture binding layouts.
+pub(crate) const WEBGPU_PROPERTY_READ_ONLY: &str = "readOnly";
+
+/// The `storageTexture` value for `GpuBindingLayoutEntry`/`GpuBindGroupEntry`.
+pub(crate) const WEBGPU_PROPERTY_STORAGE_TEXTURE: &str = "storageTexture";
+
+/// The `visibility` property key inside `GpuBindGroupLayoutEntry`.
+pub(crate) const WEBGPU_PROPERTY_VISIBILITY: &str = "visibility";
+
+/// The `querySet` property key inside `GpuComputePassDescriptor.timestampWrites`.
+/// The `beginningOfPassWriteIndex` property key for timestamp writes.
+/// The `endOfPassWriteIndex` property key for timestamp writes.
+/// The `timestamp-writes` descriptor field on render / compute passes.
+/// The bitmask value for `GPUBufferUsage.MAP_READ` (`0x01`).
+/// The bitmask value for `GPUBufferUsage.MAP_WRITE` (`0x02`).
+/// The bitmask value for `GPUBufferUsage.STORAGE` (`0x80`).
+///
+/// Required on any buffer that is bound as `var<storage>` in WGSL.
+/// The bitmask value for `GPUBufferUsage.INDIRECT` (`0x100`).
+///
+/// Required on buffers used as the indirect argument of `drawIndexedIndirect` / `drawIndirect`.
+/// The bitmask value for `GPUBufferUsage.QUERY_RESOLVE` (`0x200`).
+///
+/// Required on the destination buffer of `commandEncoder.resolveQuerySet`.
+/// `timestamp` query type inside `GpuQuerySetDescriptor`.
+pub(crate) const WEBGPU_QUERY_TYPE_TIMESTAMP: &str = "timestamp";
+
+/// The `depth` value for `GpuTextureBindingLayout.sampleType`.
+/// The `float` value for `GpuTextureBindingLayout.sampleType`.
+/// The `unfilterable-float` value for `GpuTextureBindingLayout.sampleType`.
+/// The `2d-array` view-dimension value inside texture binding layouts.
+/// The `cube` view-dimension value inside texture binding layouts.
+/// `uint16` value for `GpuRenderPipelineDescriptor.primitive.indexFormat`.
+/// `uint32` value for `GpuRenderPipelineDescriptor.primitive.indexFormat`.
 /// The bitmask value for `GPUBufferUsage.UNIFORM` (`0x40`).
 pub(crate) const WEBGPU_BUFFER_USAGE_UNIFORM: f64 = 64.0;
 

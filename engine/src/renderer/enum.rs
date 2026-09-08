@@ -317,7 +317,10 @@ pub enum VertexStepMode {
 /// A single binding entry inside a `BindGroupDescriptor`.
 #[derive(Clone, Debug)]
 pub enum BindGroupEntry {
-    /// A uniform/storage buffer binding.
+    /// A uniform / storage buffer binding.
+    ///
+    /// In WGSL terms, the buffer's `usage` must include `UNIFORM` for
+    /// `var<uniform>` bindings and `STORAGE` for `var<storage>` bindings.
     Buffer {
         /// The binding slot (matches `@binding(N)` in the shader).
         binding: u32,
@@ -328,6 +331,20 @@ pub enum BindGroupEntry {
         /// The size in bytes of the binding. `None` means "until the end
         /// of the buffer".
         size: Option<u64>,
+    },
+    /// A read-write storage texture binding.
+    ///
+    /// The `GpuTexture` must have been created with `STORAGE_BINDING`
+    /// in its `usage` flag. Combine with `view` (a `GpuTextureView`)
+    /// obtained from `GpuTexture.createView()`.
+    StorageTexture {
+        /// The binding slot.
+        binding: u32,
+        /// The `GpuTextureView` handle.
+        view: JsValue,
+        /// `true` for `texture_storage_2d<format, read>` bindings,
+        /// `false` for `texture_storage_2d<format, read_write>` bindings.
+        read_only: bool,
     },
     /// A sampled texture binding.
     Texture {
@@ -342,5 +359,148 @@ pub enum BindGroupEntry {
         binding: u32,
         /// The `GpuSampler` handle.
         sampler: JsValue,
+    },
+}
+
+/// A single entry inside a `GpuBindGroupLayoutDescriptor`.
+///
+/// Together these describe one slot of the bind group layout used by
+/// a render / compute pipeline. The visibility bitmask controls
+/// which shader stages can read the binding (`VERTEX = 0x1`,
+/// `FRAGMENT = 0x2`, `COMPUTE = 0x4`); `VERTEX | FRAGMENT = 0x3` and
+/// `VERTEX | FRAGMENT | COMPUTE = 0x7` are the most common values.
+#[derive(Clone, Debug)]
+pub struct BindGroupLayoutEntry {
+    /// The binding slot (matches `@binding(N)` in the shader).
+    pub binding: u32,
+    /// Visibility bitmask (`VERTEX = 0x1`, `FRAGMENT = 0x2`, `COMPUTE = 0x4`).
+    pub visibility: u32,
+    /// The resource kind bound at this slot.
+    pub ty: BindGroupEntryType,
+}
+
+impl BindGroupLayoutEntry {
+    /// Convenience constructor for a uniform-buffer binding slot.
+    pub fn uniform(binding: u32, visibility: u32) -> Self {
+        Self {
+            binding,
+            visibility,
+            ty: BindGroupEntryType::UniformBuffer,
+        }
+    }
+    /// Convenience constructor for a storage-buffer binding slot.
+    ///
+    /// `read_only = true` selects `read-only-storage` (matches `var<storage, read>`);
+    /// `read_only = false` selects `storage` (matches `var<storage, read_write>`).
+    pub fn storage(binding: u32, visibility: u32, read_only: bool) -> Self {
+        Self {
+            binding,
+            visibility,
+            ty: BindGroupEntryType::StorageBuffer { read_only },
+        }
+    }
+    /// Convenience constructor for a sampled texture binding slot.
+    ///
+    /// `sample_type` must be one of `"float"`, `"unfilterable-float"`,
+    /// `"depth"`, `"sint"`, `"uint"`.
+    pub fn texture(binding: u32, visibility: u32, sample_type: &str) -> Self {
+        Self {
+            binding,
+            visibility,
+            ty: BindGroupEntryType::SampledTexture {
+                sample_type: sample_type.to_string(),
+                multisampled: false,
+            },
+        }
+    }
+    /// Convenience constructor for a multisampled sampled texture binding slot.
+    pub fn texture_multisampled(binding: u32, visibility: u32, sample_type: &str) -> Self {
+        Self {
+            binding,
+            visibility,
+            ty: BindGroupEntryType::SampledTexture {
+                sample_type: sample_type.to_string(),
+                multisampled: true,
+            },
+        }
+    }
+    /// Convenience constructor for a storage-texture binding slot.
+    ///
+    /// `format` is a GpuTextureFormat string such as `"rgba8unorm"` or `"r32float"`.
+    pub fn storage_texture(binding: u32, visibility: u32, format: &str, read_only: bool) -> Self {
+        Self {
+            binding,
+            visibility,
+            ty: BindGroupEntryType::StorageTexture {
+                read_only,
+                format: format.to_string(),
+            },
+        }
+    }
+    /// Convenience constructor for a filtering sampler binding slot.
+    pub fn sampler(binding: u32, visibility: u32) -> Self {
+        Self {
+            binding,
+            visibility,
+            ty: BindGroupEntryType::Sampler {
+                filtering: true,
+                comparison: false,
+            },
+        }
+    }
+    /// Convenience constructor for a non-filtering sampler binding slot.
+    pub fn sampler_non_filtering(binding: u32, visibility: u32) -> Self {
+        Self {
+            binding,
+            visibility,
+            ty: BindGroupEntryType::Sampler {
+                filtering: false,
+                comparison: false,
+            },
+        }
+    }
+    /// Convenience constructor for a comparison sampler binding slot.
+    pub fn sampler_comparison(binding: u32, visibility: u32) -> Self {
+        Self {
+            binding,
+            visibility,
+            ty: BindGroupEntryType::Sampler {
+                filtering: false,
+                comparison: true,
+            },
+        }
+    }
+}
+
+/// The resource kind bound at a single slot of a `BindGroupLayoutEntry`.
+#[derive(Clone, Debug)]
+pub enum BindGroupEntryType {
+    /// `GpuBufferBindingLayout { type: "uniform" }`.
+    UniformBuffer,
+    /// `GpuBufferBindingLayout { type: "storage" | "read-only-storage" }`.
+    StorageBuffer {
+        /// `true` → `"read-only-storage"`, `false` → `"storage"`.
+        read_only: bool,
+    },
+    /// `GpuTextureBindingLayout`.
+    SampledTexture {
+        /// One of `"float"`, `"unfilterable-float"`, `"depth"`, `"sint"`, `"uint"`.
+        sample_type: String,
+        /// `true` if the bound texture is multisampled (matches MSAA render-target sampling).
+        multisampled: bool,
+    },
+    /// `GpuStorageTextureBindingLayout`.
+    StorageTexture {
+        /// `true` → `"read-only"`, `false` → `"read-write"`.
+        read_only: bool,
+        /// Texture format string (e.g. `"rgba8unorm"`, `"r32float"`).
+        format: String,
+    },
+    /// `GpuSamplerBindingLayout`.
+    Sampler {
+        /// `true` for filtering samplers (linear interpolation).
+        filtering: bool,
+        /// `true` for comparison samplers (depth-texture sampling).
+        comparison: bool,
     },
 }
