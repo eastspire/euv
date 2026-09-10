@@ -75,7 +75,15 @@ pub fn euv_sidebar_item(node: VirtualNode<EuvSidebarItemProps>) -> VirtualNode {
                 class: {
                     link_class()
                 }
-                href: format!("#{link}")
+                // OPT 30: see comment in `euv_navbar` — replace
+                // `format!("#{...}")` with a single `#`-prefix concat.
+                href: {
+                    let mut href: String =
+                        String::with_capacity(ROUTE_HASH_PREFIX.len() + link.len());
+                    href.push_str(ROUTE_HASH_PREFIX);
+                    href.push_str(link);
+                    href
+                }
                 onclick: navigate_link(on_navigate.clone(), link)
                 {
                     item.text
@@ -83,7 +91,16 @@ pub fn euv_sidebar_item(node: VirtualNode<EuvSidebarItemProps>) -> VirtualNode {
             }
         };
     }
-    let key: String = format!("{prefix}/{}", item.text);
+    // OPT 30: `format!("{prefix}/{}", item.text)` becomes a pre-sized
+    // concatenation of the constant separator `/` between two borrowed
+    // slices.
+    let key: String = {
+        let mut key: String = String::with_capacity(prefix.len() + 1 + item.text.len());
+        key.push_str(&prefix);
+        key.push('/');
+        key.push_str(item.text);
+        key
+    };
     let open: bool = !collapsed.get().contains(&key);
     let arrow_class: fn() -> &'static Css = if open {
         c_euv_sidebar_group_arrow_open
@@ -93,7 +110,15 @@ pub fn euv_sidebar_item(node: VirtualNode<EuvSidebarItemProps>) -> VirtualNode {
     let title_node: VirtualNode = match item.link {
         Some(link) => html! {
             a {
-                href: format!("#{link}")
+                // OPT 30: same `#`-prefix concat as above.
+                href: {
+                    let mut
+                    href: String =
+                    String::with_capacity(ROUTE_HASH_PREFIX.len() + link.len());
+                    href.push_str(ROUTE_HASH_PREFIX);
+                    href.push_str(link);
+                    href
+                }
                 onclick: navigate_group_link(on_navigate.clone(), link)
                 {
                     item.text

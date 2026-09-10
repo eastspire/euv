@@ -1223,9 +1223,16 @@ pub(crate) fn children_to_tokens(children: &[HtmlNode]) -> proc_macro2::TokenStr
             }
         }
     }
+    // OPT 37: pre-size the outer `__euv_nodes` Vec with the static child
+    // count. For-loops may add more, but `with_capacity` gives a best-case
+    // bound and at worst one or two reallocs — strictly better than
+    // `Vec::new()` which always reallocates on first push.
+    let children_len_usize: usize = children.len();
+    let children_len: proc_macro2::TokenStream = quote! { #children_len_usize };
     quote! {
         {
-            let mut __euv_nodes: Vec<::euv::VirtualNode> = Vec::new();
+            let mut __euv_nodes: Vec<::euv::VirtualNode> =
+                Vec::with_capacity(#children_len);
             #(#parts)*
             __euv_nodes
         }
@@ -1278,7 +1285,16 @@ pub(crate) fn children_to_flattened_tokens(children: &[HtmlNode]) -> proc_macro2
                     parts.push(quote! {
                         __euv_nodes.push(::euv::VirtualNode::create_dynamic(
                             move |_: &mut ::euv::HookContext| {
-                                let mut __euv_inner: Vec<::euv::VirtualNode> = Vec::new();
+                                // OPT 37: pre-allocate the inner fragment
+                                // Vec with a small fixed capacity. The
+                                // iterable's exact size is not known at
+                                // macro-expansion time without forcing a
+                                // second `size_hint` call, so we use a
+                                // conservative default that still
+                                // avoids the first realloc on the common
+                                // single-digit fragment case.
+                                let mut __euv_inner: Vec<::euv::VirtualNode> =
+                                    Vec::with_capacity(8);
                                 for #pattern in #iterable_tokens {
                                     __euv_inner.extend(#body_tokens);
                                 }
@@ -1310,9 +1326,15 @@ pub(crate) fn children_to_flattened_tokens(children: &[HtmlNode]) -> proc_macro2
             }
         }
     }
+    // OPT 37: pre-size the outer `__euv_nodes` Vec with the static child
+    // count. Same rationale as the inner `children_to_tokens` helper:
+    // for-loops may add more, but `with_capacity` is a best-case bound.
+    let children_len_usize: usize = children.len();
+    let children_len: proc_macro2::TokenStream = quote! { #children_len_usize };
     quote! {
         {
-            let mut __euv_nodes: Vec<::euv::VirtualNode> = Vec::new();
+            let mut __euv_nodes: Vec<::euv::VirtualNode> =
+                Vec::with_capacity(#children_len);
             #(#parts)*
             __euv_nodes
         }

@@ -514,8 +514,15 @@ impl ToTokens for HtmlNode {
                 let iterable_tokens: proc_macro2::TokenStream =
                     auto_get_expr_tokens(iterable, html_for.get_is_reactive());
                 let body_tokens: proc_macro2::TokenStream = children_to_tokens(html_for.get_body());
+                // OPT 37: pre-allocate the for-loop's `__euv_nodes` Vec with a
+                // small fixed capacity. The iterable's exact size is not
+                // known at macro-expansion time without forcing a
+                // second `size_hint` call, so we use a conservative
+                // default that still avoids the first realloc on the
+                // common single-digit fragment case.
                 let for_tokens: proc_macro2::TokenStream = quote! {
-                    let mut __euv_nodes: Vec<::euv::VirtualNode> = Vec::new();
+                    let mut __euv_nodes: Vec<::euv::VirtualNode> =
+                        Vec::with_capacity(8);
                     for #pattern in #iterable_tokens {
                         __euv_nodes.extend(#body_tokens);
                     }

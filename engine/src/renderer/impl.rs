@@ -5012,16 +5012,21 @@ impl WebGpuRenderer {
             // WebGPU's setBindGroup has two overloads: with and without
             // dynamic offsets. We always use the 4-arg form to keep the
             // call site simple; the empty offset array is well-defined.
-            let offsets_array: Array = Array::new_with_length(dynamic_offsets.len() as u32);
-            for (i, off) in dynamic_offsets.iter().enumerate() {
-                offsets_array.set(i as u32, JsValue::from_f64(*off as f64));
-            }
-            let offsets_js: JsValue = offsets_array.unchecked_into::<JsValue>();
+            // OPT 35: zero-copy `Uint32Array::view` over the wasm linear-memory
+            // slice instead of allocating a fresh JS Array + per-element
+            // `from_f64` writes on every setBindGroup call.
+            // SAFETY: `view` is only used inside the `set_callable.call4(...)`
+            // on the next line; the resulting JsValue does not outlive
+            // `dynamic_offsets`'s borrow, and `dynamic_offsets` outlives the
+            // call because the call happens synchronously before this function
+            // returns.
+            let offsets_view: Uint32Array = unsafe { Uint32Array::view(dynamic_offsets) };
+            let offsets_js: &JsValue = offsets_view.as_ref();
             let _: Result<JsValue, JsValue> = set_callable.call4(
                 pass,
                 &JsValue::from_f64(index as f64),
                 group,
-                &offsets_js,
+                offsets_js,
                 &JsValue::from_f64(0.0),
             );
         }
@@ -5050,16 +5055,19 @@ impl WebGpuRenderer {
         if let Ok(set_fn) = Reflect::get(pass, &JsValue::from_str(WEBGPU_METHOD_SET_BIND_GROUP))
             && let Ok(set_callable) = set_fn.dyn_into::<Function>()
         {
-            let offsets_array: Array = Array::new_with_length(dynamic_offsets.len() as u32);
-            for (i, off) in dynamic_offsets.iter().enumerate() {
-                offsets_array.set(i as u32, JsValue::from_f64(*off as f64));
-            }
-            let offsets_js: JsValue = offsets_array.unchecked_into::<JsValue>();
+            // OPT 35: zero-copy `Uint32Array::view` over the wasm linear-memory
+            // slice instead of allocating a fresh JS Array + per-element
+            // `from_f64` writes on every setBindGroup call (compute variant).
+            // SAFETY: same as the render variant — the view is only used
+            // synchronously inside the next call4 invocation and does not
+            // outlive the `dynamic_offsets` borrow.
+            let offsets_view: Uint32Array = unsafe { Uint32Array::view(dynamic_offsets) };
+            let offsets_js: &JsValue = offsets_view.as_ref();
             let _: Result<JsValue, JsValue> = set_callable.call4(
                 pass,
                 &JsValue::from_f64(index as f64),
                 group,
-                &offsets_js,
+                offsets_js,
                 &JsValue::from_f64(0.0),
             );
         }

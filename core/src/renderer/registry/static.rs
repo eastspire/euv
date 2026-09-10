@@ -47,3 +47,14 @@ pub static NEXT_WINDOW_HANDLER_ID: AtomicUsize = AtomicUsize::new(0);
 /// Global window event proxy registry, mapping event names to handler lists.
 pub(crate) static mut WINDOW_EVENT_REGISTRY: LazyLock<WindowEventRegistryCell> =
     LazyLock::new(|| WindowEventRegistryCell(UnsafeCell::new(HashMap::new())));
+
+/// Global `NodeRef` registry used to clear `NodeRef` handles when the
+/// DOM element they point to is unmounted.
+///
+/// NP-3: each time a `ref:` attribute fires, the mount path registers
+/// the `NodeRef`'s shared interior cell into this map under the
+/// element's `euv_id`. `cleanup_subtree` then drains the entries for
+/// that id and calls `NodeRef::clear` so `get()` / `get_cloned()` return
+/// `None` after the underlying DOM subtree is gone.
+pub(crate) static mut NODEREF_REGISTRY: LazyLock<NodeRefRegistryCell> =
+    LazyLock::new(|| NodeRefRegistryCell(UnsafeCell::new(HashMap::new())));

@@ -15,6 +15,9 @@ unsafe impl Sync for DirtyUpdateIdsCell {}
 /// SAFETY: `WindowEventRegistryCell` is only used in single-threaded WASM contexts.
 unsafe impl Sync for WindowEventRegistryCell {}
 
+/// SAFETY: `NodeRefRegistryCell` is only used in single-threaded WASM contexts.
+unsafe impl Sync for NodeRefRegistryCell {}
+
 /// Implementation of `From` trait for converting `usize` address into `&'static mut HandlerSlot`.
 impl From<usize> for &'static mut HandlerSlot {
     /// Converts a memory address into a mutable reference to `HandlerSlot`.
@@ -101,6 +104,17 @@ impl Registry {
     #[allow(static_mut_refs)]
     pub(crate) fn get_mut_window_registry() -> &'static mut WindowEventRegistryMap {
         unsafe { &mut *WINDOW_EVENT_REGISTRY.deref().get_0().get() }
+    }
+
+    /// Returns a mutable reference to the `NodeRef` unmount-clear registry.
+    ///
+    /// # Returns
+    ///
+    /// - `&'static mut NodeRefRegistryMap` - A mutable reference to the
+    ///   global `NodeRef` registry.
+    #[allow(static_mut_refs)]
+    pub(crate) fn get_mut_noderef_registry() -> &'static mut NodeRefRegistryMap {
+        unsafe { &mut *NODEREF_REGISTRY.deref().get_0().get() }
     }
 
     /// Returns a shared reference to the handler registry.
@@ -505,23 +519,16 @@ impl Registry {
     fn window_event_listener(event_name: &str) {
         let event_name_owned: String = event_name.to_string();
         let closure: Closure<dyn FnMut()> = Closure::wrap(Box::new(move || {
-            let handler_ids: Vec<usize> = match Self::get_window_registry().get(&event_name_owned) {
-                Some(handlers) => handlers.iter().map(|(id, _ptr)| *id).collect(),
-                None => return,
-            };
-            for handler_id in handler_ids {
-                let callback_ptr: *mut Box<dyn FnMut() + 'static> =
-                    match Self::get_window_registry().get(&event_name_owned) {
-                        Some(handlers) => {
-                            match handlers.iter().find(|(id, _ptr)| *id == handler_id) {
-                                Some((_id, ptr)) => *ptr,
-                                None => continue,
-                            }
-                        }
-                        None => return,
-                    };
-                let callback: &mut Box<dyn FnMut() + 'static> = unsafe { &mut *callback_ptr };
-                callback();
+            // OPT 15: in-place iterate the registered handler list instead
+            // of `collect()`-ing the IDs into a Vec and then re-doing a
+            // HashMap lookup per ID. `to_owned` clones the string once so
+            // the closure does not borrow from the caller's `&str`.
+            let event_name_for_iter: String = event_name_owned.clone();
+            if let Some(handlers) = Self::get_window_registry().get(&event_name_for_iter) {
+                for (_handler_id, callback_ptr) in handlers.iter() {
+                    let callback: &mut Box<dyn FnMut() + 'static> = unsafe { &mut **callback_ptr };
+                    callback();
+                }
             }
         }));
         let window: Window = match window() {
@@ -531,5 +538,53 @@ impl Registry {
         let _: Result<(), JsValue> =
             window.add_event_listener_with_callback(event_name, closure.as_ref().unchecked_ref());
         closure.forget();
+    }
+
+    /// Registers a `NodeRef` handle against the given `euv_id` so it can be
+    /// cleared when the DOM element is unmounted.
+    ///
+    /// NP-3: fixes a correctness bug where `NodeRef::get()` would return a
+    /// stale `JsValue` after the underlying VDOM subtree was destroyed
+    /// (the `NodeRef` was `set` on mount but never cleared on unmount).
+    /// The fix records a clone of the `NodeRef`'s shared interior cell
+    /// keyed by the element's `euv_id`; `cleanup_noderefs` walks the
+    /// entry list and calls `clear()` on each cell so consumers see
+    /// `None` again.
+    ///
+    /// # Arguments
+    ///
+    /// - `usize` - The element's unique `data-euv-id` value.
+    /// - `NodeRefEntry` - A clone of the `NodeRef`'s interior `Rc<UnsafeCell<Option<JsValue>>>`.
+    pub(crate) fn register_noderef(euv_id: usize, entry: NodeRefEntry) {
+        let registry: &mut NodeRefRegistryMap = Self::get_mut_noderef_registry();
+        registry.entry(euv_id).or_default().push(entry);
+    }
+
+    /// Clears every `NodeRef` handle that was registered against `euv_id`
+    /// and forgets the list.
+    ///
+    /// Called from `cleanup_subtree` after `cleanup_element` so consumers
+    /// that read a `NodeRef` after the DOM element is removed see `None`
+    /// instead of a detached `JsValue`. The `Rc` clones kept in the
+    /// registry are dropped here, releasing the shared interior cell when
+    /// no other clone remains.
+    ///
+    /// # Arguments
+    ///
+    /// - `usize` - The element's unique `data-euv-id` value.
+    pub(crate) fn cleanup_noderefs(euv_id: usize) {
+        let registry: &mut NodeRefRegistryMap = Self::get_mut_noderef_registry();
+        let Some(entries) = registry.remove(&euv_id) else {
+            return;
+        };
+        for entry in entries {
+            // SAFETY: `NodeRef::clear` is the only mutating accessor on the
+            // cell; mounting-time `NodeRef::set` and unmount-time `clear`
+            // are serialised by the single-threaded WASM execution model.
+            let cell: *mut Option<JsValue> = entry.as_ref().get();
+            unsafe {
+                let _: Option<JsValue> = (*cell).take();
+            }
+        }
     }
 }

@@ -252,18 +252,43 @@ impl Renderer {
         old_attrs: &[AttributeEntry],
         new_attrs: &[AttributeEntry],
     ) {
-        let old_index: HashMap<&str, &AttributeValue> = old_attrs
-            .iter()
-            .map(|a| (a.get_name().as_ref(), a.get_value()))
-            .collect();
-        let new_index: HashMap<&str, &AttributeValue> = new_attrs
-            .iter()
-            .map(|a| (a.get_name().as_ref(), a.get_value()))
-            .collect();
+        // OPT 10: skip the two `HashMap` builds when both attribute lists
+        // are short. For small n (≤8 attributes) the linear scan is faster
+        // than paying two heap allocations + per-key hashing. Past that
+        // threshold the O(1) HashMap lookups start to win again, so we
+        // only fall through to the original HashMap path when at least one
+        // side is large. When we do fall back, the indexes are built once
+        // and reused by the per-attr patch loop.
+        const LINEAR_SCAN_THRESHOLD: usize = 8;
+        let use_linear_scan: bool =
+            old_attrs.len() <= LINEAR_SCAN_THRESHOLD && new_attrs.len() <= LINEAR_SCAN_THRESHOLD;
+        let new_index: HashMap<&str, &AttributeValue> = if use_linear_scan {
+            HashMap::new()
+        } else {
+            new_attrs
+                .iter()
+                .map(|a| (a.get_name().as_ref(), a.get_value()))
+                .collect()
+        };
+        let old_index: HashMap<&str, &AttributeValue> = if use_linear_scan {
+            HashMap::new()
+        } else {
+            old_attrs
+                .iter()
+                .map(|a| (a.get_name().as_ref(), a.get_value()))
+                .collect()
+        };
         let mut needs_event_cleanup: bool = false;
         for old_attr in old_attrs {
             let old_name: &str = old_attr.get_name().as_ref();
-            if !new_index.contains_key(old_name) {
+            let removed: bool = if use_linear_scan {
+                !new_attrs
+                    .iter()
+                    .any(|a: &AttributeEntry| a.get_name().as_ref() == old_name)
+            } else {
+                !new_index.contains_key(old_name)
+            };
+            if removed {
                 if let AttributeValue::Event(_) = old_attr.get_value() {
                     needs_event_cleanup = true;
                 }
@@ -289,6 +314,8 @@ impl Renderer {
             0
         };
         if needs_event_cleanup {
+            // OPT 10: `new_index` was already built above for the
+            // non-linear-scan path; pass it straight through.
             self.detach_removed_event_handlers(old_attrs, &new_index, cached_euv_id);
         }
         for new_attr in new_attrs {
@@ -317,9 +344,18 @@ impl Renderer {
                 }
                 _ => {
                     let new_name: &str = new_attr.get_name().as_ref();
-                    let old_value: Option<&&AttributeValue> = old_index.get(new_name);
-                    let should_set: bool = match old_value {
-                        Some(old_val) => *old_val != new_attr.get_value(),
+                    // OPT 10: for the linear-scan path, look up `old_value`
+                    // by linear find instead of touching the HashMap.
+                    let old_value_opt: Option<&AttributeValue> = if use_linear_scan {
+                        old_attrs
+                            .iter()
+                            .find(|a: &&AttributeEntry| a.get_name().as_ref() == new_name)
+                            .map(|a: &AttributeEntry| a.get_value())
+                    } else {
+                        old_index.get(new_name).copied()
+                    };
+                    let should_set: bool = match old_value_opt {
+                        Some(old_val) => old_val != new_attr.get_value(),
                         None => true,
                     };
                     if should_set {
@@ -357,8 +393,31 @@ impl Renderer {
                                 element.set_inner_html(&value);
                             }
                             AttributeValue::Ref(node_ref) => {
+                                // NP-3: assign (or reuse) the element's
+                                // `data-euv-id` and register the NodeRef's
+                                // shared interior cell so the handle can be
+                                // cleared on unmount.
+                                let ref_euv_id: usize = match element.get_attribute(DATA_EUV_ID) {
+                                    Some(id_str) => id_str.parse::<usize>().unwrap_or_else(|_| {
+                                        let new_id: usize =
+                                            NEXT_EUV_ID.fetch_add(1, Ordering::Relaxed);
+                                        let _: Result<(), JsValue> =
+                                            element.set_attribute(DATA_EUV_ID, &new_id.to_string());
+                                        new_id
+                                    }),
+                                    None => {
+                                        let new_id: usize =
+                                            NEXT_EUV_ID.fetch_add(1, Ordering::Relaxed);
+                                        let _: Result<(), JsValue> =
+                                            element.set_attribute(DATA_EUV_ID, &new_id.to_string());
+                                        new_id
+                                    }
+                                };
                                 let element_value: JsValue = element.clone().into();
                                 node_ref.set(element_value);
+                                // NP-3: clone the interior Rc so the
+                                // registry can clear the handle on unmount.
+                                Registry::register_noderef(ref_euv_id, node_ref.inner.clone());
                             }
                         }
                     }
@@ -839,8 +898,27 @@ impl Renderer {
                             });
                         }
                         AttributeValue::Ref(node_ref) => {
+                            // NP-3: assign (or reuse) the element's
+                            // `data-euv-id` and register the NodeRef's
+                            // shared interior cell so the handle can be
+                            // cleared on unmount.
+                            let ref_euv_id: usize = match element.get_attribute(DATA_EUV_ID) {
+                                Some(id_str) => id_str.parse::<usize>().unwrap_or_else(|_| {
+                                    let new_id: usize = NEXT_EUV_ID.fetch_add(1, Ordering::Relaxed);
+                                    let _: Result<(), JsValue> =
+                                        element.set_attribute(DATA_EUV_ID, &new_id.to_string());
+                                    new_id
+                                }),
+                                None => {
+                                    let new_id: usize = NEXT_EUV_ID.fetch_add(1, Ordering::Relaxed);
+                                    let _: Result<(), JsValue> =
+                                        element.set_attribute(DATA_EUV_ID, &new_id.to_string());
+                                    new_id
+                                }
+                            };
                             let element_value: JsValue = element.clone().into();
                             node_ref.set(element_value);
+                            Registry::register_noderef(ref_euv_id, node_ref.inner.clone());
                         }
                     }
                 }
@@ -933,21 +1011,27 @@ impl Renderer {
         let placeholder_clone: Element = placeholder.clone();
         let mut renderer_for_sub: Self = Self::new(placeholder_clone.clone());
         renderer_for_sub.set_current_tree(Some(initial_unwrapped));
-        // Wrap heap allocations in OwnedPtr so they are freed when the closure drops.
-        let renderer_owned: OwnedPtr<Renderer> =
-            OwnedPtr::new(Box::into_raw(Box::new(renderer_for_sub)));
+        // OPT 16: consolidate the per-dynamic-mount state (sub-renderer +
+        // last-arm index) into a single Box<DynamicState> so each mount
+        // allocates one heap chunk instead of three. The FnMut closure
+        // captures a raw pointer to this state and reads/writes the
+        // `last_arm` field through it.
         let initial_arm: usize = hook_context
             .get_inner()
             .try_borrow()
             .map(|inner: Ref<HookContextInner>| inner.get_arm_changed())
             .unwrap_or_default();
-        let last_arm_owned: OwnedPtr<usize> = OwnedPtr::new(Box::into_raw(Box::new(initial_arm)));
+        let state: *mut DynamicState = Box::into_raw(Box::new(DynamicState {
+            renderer: renderer_for_sub,
+            last_arm: initial_arm,
+        }));
+        let state_owned: OwnedPtr<DynamicState> = OwnedPtr::new(state);
         let callback: Box<dyn FnMut()> = Box::new(move || {
             if placeholder_clone.parent_node().is_none() {
                 return;
             }
             hook_context.reset_index();
-            let prev_arm: usize = unsafe { *last_arm_owned.get() };
+            let prev_arm: usize = unsafe { (*state_owned.get()).last_arm };
             CURRENT_TRACKING_DYNAMIC_ID.store(dynamic_id, Ordering::Relaxed);
             let new_vnode: VirtualNode = HookContext::with(hook_context.clone(), || {
                 let inner: &mut RenderFnInner = unsafe { &mut *render_fn_rc.get() };
@@ -960,27 +1044,27 @@ impl Renderer {
                 .unwrap_or_default();
             let arm_switched: bool = prev_arm != current_arm;
             unsafe {
-                *last_arm_owned.get() = current_arm;
+                (*state_owned.get()).last_arm = current_arm;
             }
             if skip_equal && !arm_switched {
-                let renderer_ref: &Renderer = unsafe { &*renderer_owned.get() };
-                if let Some(old_vnode) = renderer_ref.try_get_current_tree() {
+                let state_ref: &DynamicState = unsafe { &*state_owned.get() };
+                if let Some(old_vnode) = state_ref.renderer.try_get_current_tree() {
                     let new_unwrapped: VirtualNode = Self::unwrap_component_owned(new_vnode);
                     if Self::visual_eq(old_vnode, &new_unwrapped) {
                         CURRENT_TRACKING_DYNAMIC_ID.store(usize::MAX, Ordering::Relaxed);
                         return;
                     }
-                    let renderer_mut: &mut Renderer = unsafe { &mut *renderer_owned.get() };
-                    renderer_mut.render(new_unwrapped);
+                    let state_mut: &mut DynamicState = unsafe { &mut *state_owned.get() };
+                    state_mut.renderer.render(new_unwrapped);
                     CURRENT_TRACKING_DYNAMIC_ID.store(usize::MAX, Ordering::Relaxed);
                     return;
                 }
             }
-            let renderer_mut: &mut Renderer = unsafe { &mut *renderer_owned.get() };
+            let state_mut: &mut DynamicState = unsafe { &mut *state_owned.get() };
             if arm_switched {
-                renderer_mut.render_full_replace(new_vnode);
+                state_mut.renderer.render_full_replace(new_vnode);
             } else {
-                renderer_mut.render(new_vnode);
+                state_mut.renderer.render(new_vnode);
             }
             CURRENT_TRACKING_DYNAMIC_ID.store(usize::MAX, Ordering::Relaxed);
         });
@@ -1194,8 +1278,12 @@ impl Renderer {
 
     /// Recursively cleans up framework resources associated with a DOM subtree.
     ///
-    /// Removes event handlers, dynamic node listeners, and signal listeners
-    /// for the given element and all of its descendants.
+    /// Removes event handlers, dynamic node listeners, signal listeners,
+    /// and `NodeRef` handles for the given element and all of its descendants.
+    ///
+    /// NP-3: clears registered `NodeRef` entries after `cleanup_element` so
+    /// `NodeRef::get()` returns `None` once the underlying DOM subtree is
+    /// gone (previously the `NodeRef` could return a stale `JsValue`).
     ///
     /// # Arguments
     ///
@@ -1205,6 +1293,9 @@ impl Renderer {
             && let Ok(euv_id) = euv_id_str.parse::<usize>()
         {
             Registry::cleanup_element(euv_id);
+            // NP-3: also drain the `NodeRef` registry so any handle that
+            // captured this element sees `None` again.
+            Registry::cleanup_noderefs(euv_id);
         }
         if let Some(dynamic_id_str) = element.get_attribute(DATA_EUV_DYNAMIC_ID)
             && let Ok(dynamic_id) = dynamic_id_str.parse::<usize>()
