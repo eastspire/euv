@@ -1,5 +1,77 @@
 use super::*;
 
+/// Returns the indices of a longest strictly increasing subsequence
+/// of the input values, as positions in the input slice.
+///
+/// Uses the O(N log N) patience-sort variant: for each input value,
+/// binary-search the smallest tail-end value that is greater-or-equal
+/// to it (equal values REPLACE rather than extend, so equal-length
+/// LIS choices resolve to the earliest possible positions in the
+/// input). For inputs of length N the running time is
+/// `O(N log N)` and the result has length `LIS(N)`.
+///
+/// The returned indices satisfy `result[0] < result[1] < ...` and
+/// `keys[result[0]] < keys[result[1]] < ...`.
+///
+/// The "leftmost LIS" convention matters for the keyed-diff caller:
+/// when walking the new children forward and skipping LIS positions,
+/// the live DOM at each LIS position still holds the right child by
+/// the time we get there (earlier non-LIS inserts anchor relative to
+/// the LIS elements without disturbing them).
+///
+/// # Arguments
+///
+/// - `&[T]` - The values to compute the LIS over.
+///
+/// # Returns
+///
+/// - `Vec<usize>` - Indices into the input slice that form an LIS.
+///   Empty when `keys.is_empty()`.
+pub(crate) fn lis_indices<T: Ord>(keys: &[T]) -> Vec<usize> {
+    let n: usize = keys.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let mut tails: Vec<usize> = Vec::with_capacity(n);
+    let mut tail_min: Vec<&T> = Vec::with_capacity(n);
+    let mut predecessors: Vec<usize> = vec![0_usize; n];
+    for (i, key) in keys.iter().enumerate() {
+        // Binary search for the first tail-end value `>` key (strict).
+        // `binary_search` returns `Err(idx)` with the insertion point
+        // when the value is absent; that insertion point is exactly
+        // the position of the first tail-end `> key`. When the value
+        // IS present at `Ok(idx)`, we replace the same-length slot
+        // (ties go to the leftmost / earliest index in the LIS).
+        // `tail_min` holds `&T`, so the search needle must also be `&T`.
+        let pos: usize = match tail_min.binary_search(&key) {
+            Ok(idx) => idx,
+            Err(idx) => idx,
+        };
+        if pos == tails.len() {
+            tails.push(i);
+            tail_min.push(key);
+        } else {
+            tails[pos] = i;
+            tail_min[pos] = key;
+        }
+        predecessors[i] = if pos == 0 { usize::MAX } else { tails[pos - 1] };
+    }
+    let mut result: Vec<usize> = Vec::with_capacity(tails.len());
+    let mut k: usize = match tails.last() {
+        Some(last) => *last,
+        None => return result,
+    };
+    while k != usize::MAX {
+        result.push(k);
+        match predecessors.get(k) {
+            Some(&next) if next != usize::MAX => k = next,
+            _ => break,
+        }
+    }
+    result.reverse();
+    result
+}
+
 /// Returns the cached `Document` for the current page, falling back to
 /// `window().document()` on the first call. `Document` is page-scoped (it
 /// stays valid until the document is replaced), so a single resolved
