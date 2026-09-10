@@ -12,7 +12,7 @@ use super::*;
 #[component]
 pub fn euv_card(node: VirtualNode<EuvCardProps>) -> VirtualNode {
     let EuvCardProps { title, .. }: EuvCardProps = node.try_get_props().unwrap_or_default();
-    let children: VirtualNode = node.get_child_node();
+    let children: VirtualNode = node.get_children().into();
     html! {
         div {
             class: c_card()

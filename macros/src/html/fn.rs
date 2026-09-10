@@ -871,7 +871,7 @@ pub(crate) fn parse_html_children(content: ParseStream) -> syn::Result<Vec<HtmlN
             children.push(HtmlNode::Element(element));
         } else if content.peek(LitStr) {
             let literal_string: LitStr = content.parse()?;
-            children.push(HtmlNode::Text(literal_string.value()));
+            children.push(HtmlNode::Text(literal_string));
         } else if (is_attr_key_pattern(content) || content.peek(LitStr) && content.peek2(Colon))
             && !is_double_colon(content)
         {
@@ -1018,7 +1018,7 @@ pub(crate) fn parse_dynamic_component_children(
             attributes.push((key_literal.to_token_stream(), value));
         } else if content.peek(LitStr) {
             let literal_string: LitStr = content.parse()?;
-            children.push(HtmlNode::Text(literal_string.value()));
+            children.push(HtmlNode::Text(literal_string));
         } else if content.peek(Ident) {
             if content.peek2(Brace) {
                 let element: HtmlElement = content.parse()?;

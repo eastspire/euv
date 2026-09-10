@@ -12,7 +12,7 @@ use super::*;
 #[component]
 pub fn euv_modal(node: VirtualNode<EuvModalProps>) -> VirtualNode {
     let EuvModalProps { title, onclick }: EuvModalProps = node.try_get_props().unwrap_or_default();
-    let children: VirtualNode = node.get_child_node();
+    let children: VirtualNode = node.get_children().into();
     let on_modal_content_click = move |_: Event| {};
     html! {
         div {

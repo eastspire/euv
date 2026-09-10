@@ -16,13 +16,21 @@ pub(crate) struct RenderFnInner {
 /// Represents a text node in the virtual DOM.
 ///
 /// Text nodes may optionally be bound to a reactive signal for automatic updates.
+///
+/// OPT 29: `content` is `Cow<'static, str>` instead of `String` so the
+/// `html!` macro can emit `Cow::Borrowed("...")` for literal text
+/// without allocating a `String` per text node per render. Runtime
+/// text (signals, `format!`, `to_string()`) still falls through to
+/// `Cow::Owned`. The renderer's `set_text_content` and
+/// `create_text_node` calls take `&str`, which is what `Cow<'static, str>`
+/// derefs to, so call sites use `.as_ref()` (yields `&str`).
 #[derive(Clone, CustomDebug, Data, New)]
 pub struct TextNode {
     /// The text content.
     #[get(pub(crate))]
     #[get_mut(pub(crate))]
     #[set(pub(crate))]
-    pub(crate) content: String,
+    pub(crate) content: Cow<'static, str>,
     /// An optional signal that drives reactive text updates.
     #[debug(skip)]
     #[get(pub(crate))]

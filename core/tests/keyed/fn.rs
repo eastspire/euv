@@ -52,7 +52,7 @@ fn node_key_returns_none_for_unkeyed_element() {
 
 #[test]
 fn node_key_returns_none_for_text() {
-    let node: VirtualNode = VirtualNode::Text(TextNode::new("hello".to_string(), None));
+    let node: VirtualNode = VirtualNode::Text(TextNode::new(Cow::Owned("hello".to_string()), None));
     assert_eq!(node.key(), None);
 }
 

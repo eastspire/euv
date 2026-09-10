@@ -19,7 +19,7 @@ use super::*;
 #[component]
 pub fn euv_drawer(node: VirtualNode<EuvDrawerProps>) -> VirtualNode {
     let EuvDrawerProps { open }: EuvDrawerProps = node.try_get_props().unwrap_or_default();
-    let children: VirtualNode = node.get_child_node();
+    let children: VirtualNode = node.get_children().into();
     html! {
         div {
             class: c_euv_drawer_overlay()

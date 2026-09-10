@@ -16,7 +16,7 @@ use super::*;
 #[component]
 pub fn euv_info(node: VirtualNode<EuvInfoProps>) -> VirtualNode {
     let EuvInfoProps { label: label_text }: EuvInfoProps = node.try_get_props().unwrap_or_default();
-    let children: VirtualNode = node.get_child_node();
+    let children: VirtualNode = node.get_children().into();
     html! {
         div {
             class: c_info_row()

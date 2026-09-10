@@ -45,7 +45,7 @@ pub fn euv_page_router(node: VirtualNode<EuvPageRouterProps>) -> VirtualNode {
         route_signal: _,
         fallback: _,
     }: EuvPageRouterProps = node.try_get_props().unwrap_or_default();
-    let children: VirtualNode = node.get_child_node();
+    let children: VirtualNode = node.get_children().into();
     html! {
         div {
             class: c_page_router()

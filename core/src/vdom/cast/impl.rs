@@ -24,6 +24,31 @@ impl From<Vec<VirtualNode>> for VirtualNode {
     }
 }
 
+/// Converts a borrowed `[VirtualNode]` slice into a `VirtualNode`.
+///
+/// OPT 21: this lets call sites that hold `node.get_children()` (a
+/// `&[VirtualNode]`) hand the children straight to the `html!` macro's
+/// `(expr).into()` dispatch without first cloning into a `Vec`. The
+/// slice is materialised exactly once at the conversion site — same
+/// number of clones as the old `get_child_node` helper performed
+/// (zero for empty, one for single child, N for fragment) but moved
+/// out of the helper so any caller that just wants to peek at the
+/// children pays nothing.
+impl From<&[VirtualNode]> for VirtualNode {
+    /// Lifts a borrowed slice into a [`VirtualNode`].
+    ///
+    /// # Arguments
+    ///
+    /// - `&[VirtualNode]` - Input value to convert from.
+    fn from(children: &[VirtualNode]) -> Self {
+        match children {
+            [] => VirtualNode::Empty,
+            [only] => only.clone(),
+            _ => VirtualNode::Fragment(children.to_vec()),
+        }
+    }
+}
+
 /// Converts an `Option<VirtualNode>` into a `VirtualNode`.
 ///
 /// `Some(node)` returns the inner node, `None` returns `VirtualNode::Empty`.
@@ -102,13 +127,19 @@ impl From<String> for VirtualNode {
     ///
     /// - `String` - Input value to convert from.
     fn from(text: String) -> Self {
-        VirtualNode::Text(TextNode::new(text, None))
+        VirtualNode::Text(TextNode::new(Cow::Owned(text), None))
     }
 }
 
 /// Converts a `&str` into a text virtual node.
 impl From<&str> for VirtualNode {
     /// Converts this string slice into a text virtual node.
+    ///
+    /// The `&str` may not be `'static`, so we route through `Cow::Owned`
+    /// (small heap allocation) — runtime-evaluated text typically comes
+    /// here via `format!`, interpolated messages, or formatted signal
+    /// values. Macro-generated literal text takes the `Cow::Borrowed`
+    /// fast path in [`crate::html::HtmlNode::Text`] instead.
     ///
     /// # Returns
     ///
@@ -118,13 +149,18 @@ impl From<&str> for VirtualNode {
     ///
     /// - `&str` - Input value to convert from.
     fn from(text: &str) -> Self {
-        VirtualNode::Text(TextNode::new(text.to_string(), None))
+        VirtualNode::Text(TextNode::new(Cow::Owned(text.to_owned()), None))
     }
 }
 
 /// Converts an `i32` into a text virtual node.
 impl From<i32> for VirtualNode {
     /// Converts this integer into a text virtual node.
+    ///
+    /// OPT 29: `i32::to_string()` is unavoidable, so the Cow wraps an
+    /// `Owned` variant. (`Cow::Owned(text)` is implicit via the
+    /// `String: Into<Cow<'static, str>>` bound, but spelled out for
+    /// consistency.)
     ///
     /// # Returns
     ///
@@ -134,7 +170,7 @@ impl From<i32> for VirtualNode {
     ///
     /// - `i32` - Input value to convert from.
     fn from(value: i32) -> Self {
-        VirtualNode::Text(TextNode::new(value.to_string(), None))
+        VirtualNode::Text(TextNode::new(Cow::Owned(value.to_string()), None))
     }
 }
 
@@ -150,7 +186,7 @@ impl From<usize> for VirtualNode {
     ///
     /// - `usize` - Input value to convert from.
     fn from(value: usize) -> Self {
-        VirtualNode::Text(TextNode::new(value.to_string(), None))
+        VirtualNode::Text(TextNode::new(Cow::Owned(value.to_string()), None))
     }
 }
 
@@ -166,7 +202,7 @@ impl From<bool> for VirtualNode {
     ///
     /// - `bool` - Input value to convert from.
     fn from(value: bool) -> Self {
-        VirtualNode::Text(TextNode::new(value.to_string(), None))
+        VirtualNode::Text(TextNode::new(Cow::Owned(value.to_string()), None))
     }
 }
 
@@ -214,7 +250,10 @@ where
         // alive. Register that dependency so the bridge's heap allocation
         // can be reclaimed once `source` is deactivated.
         BridgeRefsCell::track(string_signal.get_inner(), source.get_inner());
-        VirtualNode::Text(TextNode::new(string_signal.get(), Some(string_signal)))
+        VirtualNode::Text(TextNode::new(
+            Cow::Owned(string_signal.get()),
+            Some(string_signal),
+        ))
     }
 }
 

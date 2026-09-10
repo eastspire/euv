@@ -21,9 +21,9 @@ pub fn euv_button(node: VirtualNode<EuvButtonProps>) -> VirtualNode {
         onclick: click_handler,
         disabled,
     }: EuvButtonProps = node.try_get_props().unwrap_or_default();
-    let children: VirtualNode = node.get_child_node();
+    let children: VirtualNode = node.get_children().into();
     let content: VirtualNode = match children {
-        VirtualNode::Empty => VirtualNode::Text(TextNode::new(label.to_string(), None)),
+        VirtualNode::Empty => VirtualNode::Text(TextNode::new(Cow::Owned(label.to_string()), None)),
         other => other,
     };
     match variant {

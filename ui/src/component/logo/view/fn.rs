@@ -16,7 +16,7 @@ use super::*;
 #[component]
 pub fn euv_logo(node: VirtualNode<EuvLogoProps>) -> VirtualNode {
     let EuvLogoProps { variant, on_click }: EuvLogoProps = node.try_get_props().unwrap_or_default();
-    let children: VirtualNode = node.get_child_node();
+    let children: VirtualNode = node.get_children().into();
     let class_name: String = match variant {
         LogoButtonVariant::Nav => format!(
             "{} {}",
