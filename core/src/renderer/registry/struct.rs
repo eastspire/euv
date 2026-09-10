@@ -56,6 +56,48 @@ pub(crate) struct SignalUpdateSlot {
     pub(crate) dirty: bool,
 }
 
+/// A typed binding from a bridge `Signal<String>` to a specific DOM
+/// mutation.
+///
+/// Replaces the older bridge-signal + `BridgeRefsCell::track` chain for
+/// per-`{sig}` mount paths. The bridge's listener captures the typed
+/// bridge by move and on every set fires a single typed mutation directly
+/// without going through `BridgeRefsCell`, `is_connected()`, or an
+/// `attr_name.to_string()` clone per signal set. The bridge struct is
+/// stored in `ATTRIBUTE_BRIDGES` keyed by the bridge signal's address and
+/// freed by `Registry::cleanup_attribute_bridge` at the same time
+/// `Signal::<String>::clear_listeners` releases the bridge signal's
+/// listener closure.
+///
+/// Variants:
+/// - `SetAttribute` — write `attr_name = value` on an Element. Used by
+///   `AttributeValue::Signal` mount paths.
+/// - `SetInnerHtml` — replace `innerHTML` on an Element. Used by
+///   `AttributeValue::InnerHtmlSignal` mount paths.
+/// - `SetTextContent` — replace the text on a `Text` node. Used by the
+///   text-signal mount path in `create_dom_with_doc`.
+pub(crate) enum AttributeBridge {
+    /// Writes `attr_name = value` via `Element::set_attribute_or_property`.
+    SetAttribute {
+        /// The DOM element to mutate on every source-signal set.
+        elem: Element,
+        /// The attribute name (compile-time static — never allocates).
+        attr_name: &'static str,
+    },
+    /// Replaces `innerHTML` via `Element::set_inner_html`.
+    SetInnerHtml {
+        /// The DOM element whose `innerHTML` is replaced on every
+        /// source-signal set.
+        elem: Element,
+    },
+    /// Replaces text content via `Text::set_text_content`.
+    SetTextContent {
+        /// The DOM `Text` node whose data is replaced on every
+        /// source-signal set.
+        text: Text,
+    },
+}
+
 /// A `Sync` wrapper for single-threaded global `HashMap` access.
 ///
 /// SAFETY: This type is only safe to use in single-threaded contexts
@@ -99,6 +141,36 @@ pub(crate) struct SignalUpdateRegistryCell(
     #[get_mut(pub(crate))]
     #[set(pub(crate))]
     pub UnsafeCell<HashMap<usize, SignalUpdateEntry>>,
+);
+
+/// A `Sync` wrapper for single-threaded global `HashMap<usize, AttributeBridge>` access.
+///
+/// Stores the typed attribute bridges keyed by bridge signal address.
+/// Populated by `Registry::register_attribute_bridge` and drained by
+/// `Registry::cleanup_attribute_bridge` (called from
+/// `Signal::<String>::clear_listeners`).
+///
+/// Replaces the older bridge-signal + `BridgeRefsCell::track` chain that
+/// allocated a `HashSet<usize>` per bridge (the source-dependency set) and
+/// required a `HashMap<usize, HashSet<usize>>` lookup on every
+/// `Signal::deactivate` for every bridge ever registered. With this
+/// registry the bridge struct is keyed by the bridge's address (already in
+/// `data-euv-signal-addrs`) and freed at the same time as the bridge
+/// signal — one `HashMap<usize, AttributeBridge>` lookup per cleanup
+/// instead of one `HashMap<usize, HashSet<usize>>` lookup per
+/// `Signal::deactivate` walk.
+///
+/// SAFETY: This type is only safe to use in single-threaded contexts
+/// (e.g., WASM). It implements `Sync` to allow usage as a `static mut`
+/// variable, but concurrent access from multiple threads would be
+/// undefined behavior.
+#[derive(Data, Debug, New)]
+pub(crate) struct AttributeBridgesCell(
+    /// Interior-mutable storage for the typed-attribute-bridge registry.
+    #[get(pub(crate))]
+    #[get_mut(pub(crate))]
+    #[set(pub(crate))]
+    pub UnsafeCell<HashMap<usize, AttributeBridge>>,
 );
 
 /// A `Sync` wrapper for single-threaded global `HashSet` access used by

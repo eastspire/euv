@@ -58,3 +58,19 @@ pub(crate) static mut WINDOW_EVENT_REGISTRY: LazyLock<WindowEventRegistryCell> =
 /// `None` after the underlying DOM subtree is gone.
 pub(crate) static mut NODEREF_REGISTRY: LazyLock<NodeRefRegistryCell> =
     LazyLock::new(|| NodeRefRegistryCell(UnsafeCell::new(HashMap::new())));
+
+/// Global typed-attribute-bridge registry, mapping bridge signal addresses
+/// to the `AttributeBridge` that the bridge signal's listener mutates on
+/// every set.
+///
+/// Populated by `Registry::register_attribute_bridge` (called from the
+/// per-`{sig}` mount paths in `Renderer::create_dom_with_doc`) and drained
+/// by `Registry::cleanup_attribute_bridge` (called from
+/// `Signal::<String>::clear_listeners`).
+///
+/// Replaces the older bridge-signal + `BridgeRefsCell::track` chain that
+/// allocated a `HashSet<usize>` per bridge (the source-dependency set).
+/// With this registry the bridge struct is freed at exactly the same time
+/// as the bridge signal, and no per-source-signal `HashSet` is needed.
+pub(crate) static mut ATTRIBUTE_BRIDGES: LazyLock<AttributeBridgesCell> =
+    LazyLock::new(|| AttributeBridgesCell(UnsafeCell::new(HashMap::new())));

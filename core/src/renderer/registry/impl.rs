@@ -18,6 +18,9 @@ unsafe impl Sync for WindowEventRegistryCell {}
 /// SAFETY: `NodeRefRegistryCell` is only used in single-threaded WASM contexts.
 unsafe impl Sync for NodeRefRegistryCell {}
 
+/// SAFETY: `AttributeBridgesCell` is only used in single-threaded WASM contexts.
+unsafe impl Sync for AttributeBridgesCell {}
+
 /// Implementation of `From` trait for converting `usize` address into `&'static mut HandlerSlot`.
 impl From<usize> for &'static mut HandlerSlot {
     /// Converts a memory address into a mutable reference to `HandlerSlot`.
@@ -141,47 +144,46 @@ impl Registry {
     /// find the nearest element with a `data-euv-id` attribute, then
     /// invoking the matching handler from the global registry.
     ///
+    /// The ancestor walk happens entirely in JS via `euv_event_walk_ancestors`
+    /// (a `#[wasm_bindgen(inline_js)]` glue function in this module), so the
+    /// per-event cost is **one** WASM↔JS crossing for the walk itself,
+    /// plus one callback invocation per marked ancestor. The previous
+    /// Rust-side loop walked one layer at a time (`get_attribute` +
+    /// `parent_element` = 2 JS crossings per layer); a depth-10 click used
+    /// to cost 20 crossings; it now costs 1 walk crossing + N callback
+    /// crossings where N = number of `data-euv-id` ancestors (typically
+    /// 1–3 for nested DOM).
+    ///
     /// `max_depth` caps the ancestor walk at this many `parent_element`
     /// hops. The walk counts `event.target()` itself as depth 0. Pass
-    /// `usize::MAX` for an unbounded walk (the original behaviour).
-    /// Events named in `HIGH_FREQUENCY_EVENTS` use a smaller cap
-    /// (see `MAX_ANCESTOR_DEPTH_FOR_HIGH_FREQ`) because their handlers
-    /// almost always live within a handful of ancestors of the target
-    /// (e.g. a `mousemove` listener attached to a scroll container).
+    /// `0` for an unbounded walk (the original behaviour) — note the JS
+    /// glue treats `0` as "walk until `<html>`" per the call-site
+    /// convention below; events in `HIGH_FREQUENCY_EVENTS` get a bounded
+    /// cap so their per-event cost stays proportional to a small constant
+    /// rather than DOM depth.
     ///
     /// # Arguments
     ///
     /// - `&Event` - The DOM event to dispatch.
     /// - `&'static str` - The event name (e.g., "click", "input").
-    /// - `usize` - Upper bound on ancestor walk depth; `usize::MAX` for unbounded.
+    /// - `usize` - Upper bound on ancestor walk depth; `0` for unbounded.
     fn dispatch_delegated_event(event: &Event, event_name: &'static str, max_depth: usize) {
-        let target: EventTarget = match event.target() {
-            Some(event_target) => event_target,
-            None => return,
-        };
-        let mut current: Option<Element> = target.dyn_ref::<Element>().cloned().or_else(|| {
-            target
-                .dyn_ref::<Node>()
-                .and_then(|node: &Node| node.parent_node())
-                .and_then(|parent: Node| parent.dyn_ref::<Element>().cloned())
-        });
-        // Bound the ancestor walk so high-frequency events
-        // (mousemove / touchmove / pointermove / scroll / wheel /
-        // mousewheel) don't pay the cost of `get_attribute` +
-        // `parse::<usize>` + HashMap lookup at every intermediate DOM
-        // node between the target and the handler. The cap is wide
-        // enough to reach a typical scroll/drag container (a few levels
-        // above the deepest leaf) while keeping the worst case
-        // proportional to constant time rather than DOM depth.
-        let mut depth: usize = 0;
-        while let Some(element) = current {
-            if depth >= max_depth {
-                break;
-            }
-            if let Some(euv_id_str) = element.get_attribute(DATA_EUV_ID)
-                && let Ok(euv_id) = euv_id_str.parse::<usize>()
-            {
-                let handler_found: Option<NativeEventHandler> = Self::get_handler_registry()
+        // Clone the event into an owned `JsValue` so the wasm-bindgen
+        // callback closure can capture it by value (`Closure::wrap` requires
+        // `'static`). The underlying DOM `Event` is reference-counted by
+        // wasm-bindgen so the clone is cheap.
+        let event_value: JsValue = event.clone().into();
+        // Snapshot the handler registry for the lifetime of the closure.
+        // The registry lives in a `static mut` cell; cloning it gives the
+        // closure its own owned copy so we don't hold the `unsafe` borrow
+        // across the callback (which would violate Rust's aliasing rules).
+        let handler_lookup: HandlerRegistryMap = Self::get_handler_registry().clone();
+        // Hold an extra clone of the JsValue for the Rust→JS walk call
+        // below; the closure needs its own clone for the handler path.
+        let event_value_for_walk: JsValue = event_value.clone();
+        let callback: Closure<dyn FnMut(usize) -> bool> =
+            Closure::wrap(Box::new(move |euv_id: usize| -> bool {
+                let handler_found: Option<NativeEventHandler> = handler_lookup
                     .get(&euv_id)
                     .and_then(|event_map: &HashMap<&'static str, HandlerEntry>| {
                         event_map.get(event_name)
@@ -191,12 +193,42 @@ impl Registry {
                         slot.try_get_handler().as_ref().cloned()
                     });
                 if let Some(active_handler) = handler_found {
-                    active_handler.handle(event.clone());
-                    return;
+                    // Re-borrow the captured JsValue back into an Event for
+                    // the handler. The clone above keeps the event alive.
+                    let event_for_handler: Event = event_value.clone().unchecked_into();
+                    active_handler.handle(event_for_handler);
+                    return true;
                 }
-            }
-            current = element.parent_element();
-            depth += 1;
+                false
+            }));
+        let callback_function: &js_sys::Function = callback.as_ref().unchecked_ref();
+        let _found: bool =
+            euv_event_walk_ancestors(&event_value_for_walk, max_depth, callback_function);
+        // `callback` (the Closure) is dropped at end of scope here, freeing
+        // the boxed closure allocation. `handler_lookup` (owned by the
+        // closure's environment) drops with it.
+    }
+
+    /// Computes the JS-glue walk depth cap for an event name.
+    ///
+    /// Returns `0` for unbounded walks (the JS glue in `glue.rs` treats
+    /// `0` as "walk until `<html>`"). Events listed in
+    /// `HIGH_FREQUENCY_EVENTS` get a bounded cap (see
+    /// `MAX_ANCESTOR_DEPTH_FOR_HIGH_FREQ`) so their per-event cost
+    /// stays proportional to a small constant rather than DOM depth.
+    ///
+    /// # Arguments
+    ///
+    /// - `&str` - The event name (e.g., "click", "input").
+    ///
+    /// # Returns
+    ///
+    /// - `usize` - Walk depth cap; `0` means unbounded.
+    fn dispatch_max_depth(event_name: &str) -> usize {
+        if HIGH_FREQUENCY_EVENTS.contains(&event_name) {
+            MAX_ANCESTOR_DEPTH_FOR_HIGH_FREQ
+        } else {
+            0
         }
     }
 
@@ -218,12 +250,9 @@ impl Registry {
         // time and capture it in the closure — avoids re-computing on
         // every event dispatch. Events listed in HIGH_FREQUENCY_EVENTS
         // get a bounded walk (see MAX_ANCESTOR_DEPTH_FOR_HIGH_FREQ);
-        // everything else gets the original unbounded behaviour.
-        let max_depth: usize = if HIGH_FREQUENCY_EVENTS.contains(&event_name) {
-            MAX_ANCESTOR_DEPTH_FOR_HIGH_FREQ
-        } else {
-            usize::MAX
-        };
+        // everything else gets the original unbounded behaviour, which
+        // the JS glue encodes as `0`.
+        let max_depth: usize = Self::dispatch_max_depth(event_name);
         let closure: Closure<dyn FnMut(Event)> = Closure::wrap(Box::new(move |event: Event| {
             Self::dispatch_delegated_event(&event, event_name, max_depth);
         }));
@@ -413,6 +442,47 @@ impl Registry {
                 let _: Box<SignalUpdateSlot> = Box::from_raw(entry);
             }
         }
+    }
+
+    /// Registers a typed `AttributeBridge` for a bridge signal created by
+    /// a per-`{sig}` mount path.
+    ///
+    /// Called from `Renderer::create_dom_with_doc` when wiring an
+    /// `AttributeValue::Signal` / `InnerHtmlSignal` (or text-signal) to its
+    /// target element. The bridge signal's inner address is used as the
+    /// registry key so that `cleanup_attribute_bridge` (called from
+    /// `Signal::<String>::clear_listeners`) can find the bridge from the
+    /// same address that `data-euv-signal-addrs` already carries.
+    ///
+    /// # Arguments
+    ///
+    /// - `usize` - The bridge signal's inner address used as the registry key.
+    /// - `AttributeBridge` - The typed bridge to store.
+    pub(crate) fn register_attribute_bridge(signal_addr: usize, bridge: AttributeBridge) {
+        Self::get_mut_attribute_bridges().insert(signal_addr, bridge);
+    }
+
+    /// Removes the typed `AttributeBridge` keyed by the given bridge signal
+    /// address. Called from `Signal::<String>::clear_listeners` so the
+    /// bridge struct is freed at the same time as the bridge signal's
+    /// listener closure. Idempotent: a missing key is a no-op.
+    ///
+    /// # Arguments
+    ///
+    /// - `usize` - The bridge signal's inner address used as the registry key.
+    pub(crate) fn cleanup_attribute_bridge(signal_addr: usize) {
+        Self::get_mut_attribute_bridges().remove(&signal_addr);
+    }
+
+    /// Returns a mutable reference to the typed-attribute-bridge registry.
+    ///
+    /// # Returns
+    ///
+    /// - `&'static mut HashMap<usize, AttributeBridge>` - Mutable access to
+    ///   the global typed-attribute-bridge registry.
+    #[allow(static_mut_refs)]
+    pub(crate) fn get_mut_attribute_bridges() -> &'static mut HashMap<usize, AttributeBridge> {
+        unsafe { &mut *ATTRIBUTE_BRIDGES.deref().get_0().get() }
     }
 
     /// Returns whether the given event name is a non-bubbling event.

@@ -915,26 +915,47 @@ impl Renderer {
                             let signal: Signal<String> = *signal;
                             let initial_value: String = signal.get();
                             element.set_attribute_or_property(attr.get_name(), &initial_value);
+                            // OPT 6 (rewrite): the bridge signal below now
+                            // carries a typed `AttributeBridge` (Element +
+                            // `&'static attr_name`) instead of going through
+                            // `BridgeRefsCell::track` on every set. The
+                            // bridge's listener fires the typed mutation
+                            // directly — no `is_connected()` JS call, no
+                            // `attr_name.to_string()` clone per set — and the
+                            // bridge struct is freed by
+                            // `Signal::<String>::clear_listeners` at DOM
+                            // teardown.
                             let bridge_signal: Signal<String> = Signal::create(initial_value);
-                            element.track_signal_addr(bridge_signal.get_inner());
-                            let attr_name: String = attr.get_name().to_string();
-                            let element_clone: Element = element.clone();
+                            let bridge_addr: usize = bridge_signal.get_inner();
+                            element.track_signal_addr(bridge_addr);
+                            // Extract the static attribute key. The Cow's
+                            // lifetime parameter is `'static` so `Borrowed`
+                            // branches give a real `&'static str`; the
+                            // `Owned` branch only triggers when the macro
+                            // emits a non-literal key, which is rare. We
+                            // leak the owned string so the bridge can
+                            // capture a `&'static str` (matches the
+                            // existing `Box::leak` pattern for non-static
+                            // event names).
+                            let attr_name: &'static str = match attr.get_name() {
+                                Cow::Borrowed(borrowed) => borrowed,
+                                Cow::Owned(owned) => Box::leak(owned.clone().into_boxed_str()),
+                            };
+                            let bridge_element: Element = element.clone();
+                            Registry::register_attribute_bridge(
+                                bridge_addr,
+                                AttributeBridge::SetAttribute {
+                                    elem: bridge_element.clone(),
+                                    attr_name,
+                                },
+                            );
                             bridge_signal.replace_listener(move || {
-                                if !Renderer::is_node_connected(&element_clone) {
-                                    return;
-                                }
                                 let new_value: String = bridge_signal.get();
-                                element_clone.set_attribute_or_property(&attr_name, &new_value);
+                                bridge_element.set_attribute_or_property(attr_name, &new_value);
                             });
                             signal.subscribe(move || {
                                 bridge_signal.set(signal.get());
                             });
-                            // The closure above captures `bridge_signal`, so
-                            // `signal` (the source) now transitively keeps the
-                            // bridge alive. Register that dependency so the
-                            // bridge's heap allocation can be reclaimed once
-                            // `signal` is deactivated.
-                            BridgeRefsCell::track(bridge_signal.get_inner(), signal.get_inner());
                         }
                         AttributeValue::Event(handler) => {
                             self.attach_event_listener(&element, handler);
@@ -960,14 +981,28 @@ impl Renderer {
                             let signal: Signal<String> = *signal;
                             let initial_value: String = signal.get();
                             element.set_inner_html(&initial_value);
-                            element.track_signal_addr(signal.get_inner());
-                            let element_clone: Element = element.clone();
+                            // OPT 6 (rewrite): the bridge signal below
+                            // carries a typed `AttributeBridge::SetInnerHtml`
+                            // (Element only, no attr_name) and fires the
+                            // typed mutation directly on every set. See the
+                            // comment on the `Signal` arm above for the
+                            // full rewrite rationale.
+                            let bridge_signal: Signal<String> = Signal::create(initial_value);
+                            let bridge_addr: usize = bridge_signal.get_inner();
+                            element.track_signal_addr(bridge_addr);
+                            let bridge_element: Element = element.clone();
+                            Registry::register_attribute_bridge(
+                                bridge_addr,
+                                AttributeBridge::SetInnerHtml {
+                                    elem: bridge_element.clone(),
+                                },
+                            );
+                            bridge_signal.replace_listener(move || {
+                                let new_value: String = bridge_signal.get();
+                                bridge_element.set_inner_html(&new_value);
+                            });
                             signal.subscribe(move || {
-                                if !Renderer::is_node_connected(&element_clone) {
-                                    return;
-                                }
-                                let new_value: String = signal.get();
-                                element_clone.set_inner_html(&new_value);
+                                bridge_signal.set(signal.get());
                             });
                         }
                         AttributeValue::Ref(node_ref) => {
@@ -1001,20 +1036,34 @@ impl Renderer {
                 let text: Text = document.create_text_node(text_node.get_content().as_ref());
                 if let Some(signal) = text_node.try_get_signal() {
                     let signal: Signal<String> = *signal;
-                    let bridge_signal: Signal<String> =
-                        Signal::create(text_node.get_content().as_ref().to_owned());
-                    let text_clone: Text = text.clone();
+                    let initial_value: String = text_node.get_content().clone();
+                    text.set_text_content(Some(&initial_value));
+                    // OPT 6 (rewrite): bridge signal carries the typed
+                    // `AttributeBridge::SetTextContent` (Text reference
+                    // only) and fires `set_text_content` directly. Text
+                    // nodes cannot carry a `data-euv-signal-addrs` DOM
+                    // attribute, but the bridge signal address is
+                    // available via `Signal::deactivate`'s
+                    // `BridgeRefsCell` walk — see the comment on
+                    // `Signal::deactivate` and `try_reclaim_inactive` for
+                    // the SPA-sweep path that still frees the bridge.
+                    let bridge_signal: Signal<String> = Signal::create(initial_value);
+                    let bridge_addr: usize = bridge_signal.get_inner();
+                    let bridge_text: Text = text.clone();
+                    Registry::register_attribute_bridge(
+                        bridge_addr,
+                        AttributeBridge::SetTextContent {
+                            text: bridge_text.clone(),
+                        },
+                    );
                     bridge_signal.replace_listener(move || {
-                        if !Renderer::is_node_connected(&text_clone) {
-                            return;
-                        }
                         let new_value: String = bridge_signal.get();
-                        text_clone.set_text_content(Some(&new_value));
+                        bridge_text.set_text_content(Some(&new_value));
                     });
                     signal.subscribe(move || {
                         bridge_signal.set(signal.get());
                     });
-                    BridgeRefsCell::track(bridge_signal.get_inner(), signal.get_inner());
+                    BridgeRefsCell::track(bridge_addr, signal.get_inner());
                 }
                 text.into()
             }
@@ -1488,25 +1537,6 @@ impl Renderer {
                     .insert(event_name, handler_slot);
             }
         }
-    }
-
-    /// Checks whether a DOM node is currently connected to the document.
-    ///
-    /// Uses the `isConnected` JavaScript property to determine if the node
-    /// is still attached to the live DOM tree.
-    ///
-    /// # Arguments
-    ///
-    /// - `&T` - A reference to any type that can be converted to `&Node`.
-    ///
-    /// # Returns
-    ///
-    /// - `bool` - `true` if the node is connected to the document, `false` otherwise.
-    fn is_node_connected<T>(node: &T) -> bool
-    where
-        T: AsRef<Node>,
-    {
-        node.as_ref().is_connected()
     }
 }
 
