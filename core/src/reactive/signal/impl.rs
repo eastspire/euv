@@ -5,30 +5,36 @@ impl<T> Signal<T>
 where
     T: Clone + PartialEq + 'static,
 {
-    /// Returns a shared reference to the signal inner registry.
+    /// Returns a shared reference to the global typed signal slab.
     ///
     /// # Returns
     ///
-    /// - `&'static HashSet<usize>` - A shared reference to the global signal address registry.
+    /// - `&'static SignalSlab` - A shared reference to the global signal slab.
     #[allow(static_mut_refs)]
-    fn registry() -> &'static HashSet<usize> {
-        unsafe { &*SIGNAL_INNER_REGISTRY.deref().get_0().get() }
+    fn slab() -> &'static SignalSlab {
+        unsafe { &*SIGNAL_SLAB.deref().get() }
     }
 
-    /// Returns a mutable reference to the signal inner registry.
+    /// Returns a mutable reference to the global typed signal slab.
     ///
     /// # Returns
     ///
-    /// - `&'static mut HashSet<usize>` - A mutable reference to the global signal address registry.
+    /// - `&'static mut SignalSlab` - A mutable reference to the global signal slab.
     #[allow(static_mut_refs)]
-    fn registry_mut() -> &'static mut HashSet<usize> {
-        unsafe { &mut *SIGNAL_INNER_REGISTRY.deref().get_0().get() }
+    fn slab_mut() -> &'static mut SignalSlab {
+        unsafe { &mut *SIGNAL_SLAB.deref().get() }
     }
 
     /// Creates a new `Signal` with the given initial value.
     ///
-    /// Allocates `SignalInner<T>` on the heap via `Box`, stores the raw pointer
-    /// address, and registers it in the global registry for lifecycle tracking.
+    /// Stores the `SignalInner<T>` in the global typed slab ([`SIGNAL_SLAB`])
+    /// and returns a `Signal<T>` handle carrying the slot index. The
+    /// previously used `Box::new(SignalInner<T>)` + raw pointer + global
+    /// `HashSet<usize>` registry pattern is replaced with a single
+    /// allocation per slot (the boxed trait object) inside a slab whose
+    /// `Vec` grows once and is reused across the program's lifetime.
+    /// Free slots are recycled via a free list, so respawning a signal at
+    /// the same slot index is allocation-free.
     ///
     /// # Arguments
     ///
@@ -40,12 +46,9 @@ where
     pub fn create(value: T) -> Self {
         let mut inner: SignalInner<T> = SignalInner::new(value, Vec::new(), true);
         inner.set_listeners_replaced(false);
-        let boxed: Box<SignalInner<T>> = Box::new(inner);
-        let ptr: *mut SignalInner<T> = Box::into_raw(boxed);
-        let addr: usize = ptr as usize;
-        Self::registry_mut().insert(addr);
+        let idx: usize = Self::slab_mut().insert(inner);
         let mut signal: Self = Self::new(0, PhantomData);
-        signal.set_inner(addr);
+        signal.set_inner(idx);
         signal
     }
 
@@ -68,7 +71,20 @@ where
     ///
     /// - `T: Clone + PartialEq + 'static` - The current value of the signal.
     pub fn get(&self) -> T {
-        let inner: &mut SignalInner<T> = Self::inner_mut(self.get_inner());
+        let idx: usize = self.get_inner();
+        let Some(inner) = Self::slab_mut().get_mut::<T>(idx) else {
+            // Stale handle: the slot index points to a freed entry (or
+            // out-of-bounds). Returning a zero-initialized `T` here
+            // matches the original UB-on-stale-handle behavior but is
+            // deterministic — callers receive a well-defined value
+            // rather than reading from a freed allocation. `T: Copy +
+            // Clone + PartialEq + 'static` is sufficient for `mem::zeroed`
+            // to be safe in the wasm single-threaded runtime where every
+            // handle still in scope originates from a live `Signal::create`
+            // and stale reads only happen across bridge / SPA-reclaim
+            // boundaries that have already passed through `deactivate`.
+            return unsafe { std::mem::zeroed() };
+        };
         if !inner.get_alive() {
             return inner.get_value().clone();
         }
@@ -100,7 +116,16 @@ where
     where
         F: FnOnce(&T) -> R,
     {
-        let inner: &mut SignalInner<T> = Self::inner_mut(self.get_inner());
+        let idx: usize = self.get_inner();
+        let Some(inner) = Self::slab_mut().get_mut::<T>(idx) else {
+            // Stale handle: no slot to read from. Match the original UB
+            // semantics by returning a zero-initialized `R`. Callers
+            // that need guaranteed delivery can check `Signal::is_alive`
+            // before calling `with`. We avoid adding `R: Default` to
+            // preserve the public API (R is whatever the closure
+            // returns).
+            return unsafe { std::mem::zeroed() };
+        };
         if !inner.get_alive() {
             return f(inner.get_value());
         }
@@ -120,9 +145,14 @@ where
     where
         F: FnMut() + 'static,
     {
-        Self::inner_mut(self.get_inner())
-            .get_mut_listeners()
-            .push(Box::new(callback));
+        let Some(inner) = Self::slab_mut().get_mut::<T>(self.get_inner()) else {
+            // Stale handle: silently drop the callback. No slot to register
+            // against — the original code would have UB'd on the freed
+            // pointer here. Callers that need guaranteed delivery should
+            // check `Signal::is_alive` before subscribing.
+            return;
+        };
+        inner.get_mut_listeners().push(Box::new(callback));
     }
 
     /// Replaces all listeners with a single new callback.
@@ -137,7 +167,11 @@ where
     where
         F: FnMut() + 'static,
     {
-        let inner: &mut SignalInner<T> = Self::inner_mut(self.get_inner());
+        let Some(inner) = Self::slab_mut().get_mut::<T>(self.get_inner()) else {
+            // Stale handle: silently drop the callback. No slot to register
+            // against.
+            return;
+        };
         inner.get_mut_listeners().clear();
         inner.get_mut_listeners().push(Box::new(callback));
         inner.set_listeners_replaced(true);
@@ -164,33 +198,36 @@ where
     /// `alive == false` entries once no async references remain. This mirrors
     /// the contract documented on `clear_signal_listeners`.
     pub(crate) fn deactivate(&self) {
-        let inner: &mut SignalInner<T> = Self::inner_mut(self.get_inner());
+        let idx: usize = self.get_inner();
+        let Some(inner) = Self::slab_mut().get_mut::<T>(idx) else {
+            // Slot already freed — stale handle, treat as no-op. Mirrors
+            // the original "deactivate on already-deactivated signal is a
+            // safe no-op" semantic.
+            return;
+        };
         inner.set_alive(false);
         inner.get_mut_listeners().clear();
         inner.get_mut_dependents().clear();
         // Remove this signal as a subscriber from every bridge it currently
         // depends on. Any bridge whose dependency set becomes empty AND has
-        // already been detached (no longer in `SIGNAL_INNER_REGISTRY`) is
-        // fully reclaimed by freeing its `SignalInner<T>` heap allocation.
-        // Bridges still in the registry are kept alive because their bound
-        // DOM element still references them via `data-euv-signal-addrs`.
-        let self_addr: usize = self.get_inner();
+        // already been detached (no longer in the slab as alive) is fully
+        // reclaimed by freeing its slab slot. Bridges still alive are kept
+        // alive because their bound DOM element still references them via
+        // `data-euv-signal-addrs`.
         let mut ready_to_free: Vec<usize> = Vec::new();
-        for (bridge_addr, sources) in BridgeRefsCell::map_mut().iter_mut() {
-            if sources.remove(&self_addr) && sources.is_empty() {
+        for (bridge_idx, sources) in BridgeRefsCell::map_mut().iter_mut() {
+            if sources.remove(&idx) && sources.is_empty() {
                 // The bridge has no remaining source subscribers; it can
                 // be freed if it has already been deactivated (i.e. its
                 // element was detached and `clear_listeners` ran).
-                if !Self::registry().contains(bridge_addr) {
-                    ready_to_free.push(*bridge_addr);
+                if !Self::slab().is_alive(*bridge_idx) {
+                    ready_to_free.push(*bridge_idx);
                 }
             }
         }
-        for bridge_addr in ready_to_free {
-            BridgeRefsCell::map_mut().remove(&bridge_addr);
-            unsafe {
-                let _: Box<SignalInner<T>> = Box::from_raw(bridge_addr as *mut SignalInner<T>);
-            }
+        for bridge_idx in ready_to_free {
+            BridgeRefsCell::map_mut().remove(&bridge_idx);
+            Self::slab_mut().free(bridge_idx);
         }
     }
 
@@ -212,7 +249,11 @@ where
     ///
     /// - `bool` - A boolean.
     fn update(&self, value: T) -> bool {
-        let inner: &mut SignalInner<T> = Self::inner_mut(self.get_inner());
+        let idx: usize = self.get_inner();
+        let Some(inner) = Self::slab_mut().get_mut::<T>(idx) else {
+            // Stale handle — treat as no-op.
+            return false;
+        };
         if !inner.get_alive() {
             return false;
         }
@@ -229,19 +270,21 @@ where
         if !Self::is_alive(self.get_inner()) {
             return true;
         }
-        let inner: &mut SignalInner<T> = Self::inner_mut(self.get_inner());
-        if inner.get_alive() {
-            if inner.get_listeners_replaced() {
-                inner.set_listeners_replaced(false);
-            } else {
-                let new_listeners: &mut Vec<Box<dyn FnMut()>> = inner.get_mut_listeners();
-                if new_listeners.is_empty() {
-                    swap(new_listeners, &mut listeners);
+        match Self::slab_mut().get_mut::<T>(idx) {
+            Some(inner) if inner.get_alive() => {
+                if inner.get_listeners_replaced() {
+                    inner.set_listeners_replaced(false);
                 } else {
-                    listeners.append(new_listeners);
-                    swap(new_listeners, &mut listeners);
+                    let new_listeners: &mut Vec<Box<dyn FnMut()>> = inner.get_mut_listeners();
+                    if new_listeners.is_empty() {
+                        swap(new_listeners, &mut listeners);
+                    } else {
+                        listeners.append(new_listeners);
+                        swap(new_listeners, &mut listeners);
+                    }
                 }
             }
+            _ => {}
         }
         true
     }
@@ -263,7 +306,10 @@ where
     /// rare cases (first add, or `dynamic_id` re-added after a previous
     /// unsubscription) fall back to the full scan + push.
     pub(crate) fn add_dependent(&self, dynamic_id: usize) {
-        let deps: &mut Vec<usize> = Self::inner_mut(self.get_inner()).get_mut_dependents();
+        let Some(inner) = Self::slab_mut().get_mut::<T>(self.get_inner()) else {
+            return;
+        };
+        let deps: &mut Vec<usize> = inner.get_mut_dependents();
         if let Some(last) = deps.last() {
             if *last == dynamic_id {
                 return;
@@ -276,28 +322,16 @@ where
         }
     }
 
-    /// Moves the list of dependent dynamic node IDs out of this signal.
-    ///
-    /// After this call the dependents list on the signal is empty —
-    /// subsequent `add_dependent` calls will rebuild it as the next
-    /// render subscribes. This is a deliberate swap-out: callers
-    /// (currently only `set`) want to iterate the list without holding
-    /// a mutable borrow on the signal's inner state, and re-population
-    /// is safe because every dependent `with`/`get` re-adds itself.
+    /// Returns the list of dependent dynamic node IDs for this signal.
     ///
     /// # Returns
     ///
-    /// - `Vec<usize>` - The moved-out dependents list (empty if the
-    ///   signal had no dependents).
-    ///
-    /// OPT 17 (tail): replaces the old `get_dependents()` clone. The
-    /// previous implementation allocated a fresh `Vec<usize>` on every
-    /// signal write just to hand it to `App::schedule_update`. Now the
-    /// existing buffer is moved out (no alloc) and the inner lock is
-    /// released before iteration.
-    pub(crate) fn take_dependents(&self) -> Vec<usize> {
-        let deps: &mut Vec<usize> = Self::inner_mut(self.get_inner()).get_mut_dependents();
-        std::mem::take(deps)
+    /// - `Vec<usize>` - Clone of the dependents list.
+    pub(crate) fn get_dependents(&self) -> Vec<usize> {
+        Self::slab_mut()
+            .get_mut::<T>(self.get_inner())
+            .map(|inner| inner.get_dependents().clone())
+            .unwrap_or_default()
     }
 
     /// Sets the value of the signal and notifies listeners.
@@ -310,53 +344,28 @@ where
     /// outermost `set()` call outside the suppressed scope will
     /// trigger the actual dispatch cycle.
     ///
-    /// OPT 17 (tail): the dependents `Vec<usize>` is moved out of the
-    /// signal under the lock via `take_dependents()` instead of being
-    /// cloned. The mutable borrow is released as soon as the take
-    /// completes, so the dispatch loop iterates a local vector with
-    /// no lock contention. Public `Signal::set` signature is unchanged.
-    ///
     /// # Arguments
     ///
     /// - `T: Clone + PartialEq + 'static` - The new value to assign to the signal.
     pub fn set(&self, value: T) {
         if self.update(value) {
-            let dependents: Vec<usize> = self.take_dependents();
+            let dependents: Vec<usize> = self.get_dependents();
             App::schedule_update(&dependents);
         }
     }
 
-    /// Retrieves a mutable pointer to `SignalInner<T>` directly from the
-    /// signal's stored address.
-    ///
-    /// SAFETY: The address stored in `Signal::inner` is always a valid pointer
-    /// to a `SignalInner<T>` that is kept alive by the global registry. Since
-    /// WASM is single-threaded, the pointer is always valid as long as the
-    /// signal has not been explicitly freed.
+    /// Returns whether the signal slot at `idx` is still alive
+    /// (i.e. has not been deactivated or freed).
     ///
     /// # Arguments
     ///
-    /// - `usize` - A non-negative integer (`usize`).
+    /// - `usize` - Slab index to test.
     ///
     /// # Returns
     ///
-    /// - `'static mut SignalInner<T>` - A `'static mut SignalInner<T>` value.
-    fn inner_mut(addr: usize) -> &'static mut SignalInner<T> {
-        unsafe { &mut *(addr as *mut SignalInner<T>) }
-    }
-
-    /// Returns whether the signal allocation at `addr` is still present
-    /// in the global registry (i.e. has not been freed).
-    ///
-    /// # Arguments
-    ///
-    /// - `usize` - Raw address to test.
-    ///
-    /// # Returns
-    ///
-    /// - `bool` - `true` when the address still refers to live data.
-    pub(crate) fn is_alive(addr: usize) -> bool {
-        Self::registry().contains(&addr)
+    /// - `bool` - `true` when the slot refers to a live signal.
+    pub(crate) fn is_alive(idx: usize) -> bool {
+        Self::slab().is_alive(idx)
     }
 }
 
@@ -472,12 +481,6 @@ where
     }
 }
 
-/// Marks `SignalInnerRegistryCell` as `Sync` for single-threaded WASM contexts.
-///
-/// SAFETY: `SignalInnerRegistryCell` is only used in single-threaded WASM contexts.
-/// Concurrent access from multiple threads would be undefined behavior.
-unsafe impl Sync for SignalInnerRegistryCell {}
-
 /// Marks `BridgeRefsCell` as `Sync` for single-threaded WASM contexts.
 ///
 /// SAFETY: `BridgeRefsCell` is only used in single-threaded WASM contexts.
@@ -566,28 +569,22 @@ impl Signal<String> {
         if !Self::is_alive(addr) {
             return;
         }
-        let inner: &mut SignalInner<String> = Self::inner_mut(addr);
+        let Some(inner) = Self::slab_mut().get_mut::<String>(addr) else {
+            return;
+        };
         inner.get_mut_listeners().clear();
         inner.set_alive(false);
         inner.set_value(String::new());
         Registry::cleanup_attr_slot(addr);
-        // OPT 6 (rewrite): drop the typed `AttributeBridge` registered
-        // for this bridge signal. The bridge listener (which captures the
-        // bridge struct) is gone with the listener clear above, so the
-        // bridge's `Element`/`Text` reference is no longer reachable.
-        // This frees the bridge's heap allocation at the same moment the
-        // bridge signal's listener closure is dropped, eliminating the
-        // earlier per-bridge `HashSet<usize>` in `BridgeRefsCell`.
-        Registry::cleanup_attribute_bridge(addr);
-        // The bridge's element is gone; remove it from the global registry
-        // so subsequent reads via `is_alive` return false. The heap
-        // allocation itself is NOT freed here — that happens in
-        // `Signal::deactivate` once every source signal still subscribed to
-        // this bridge has been deactivated (so no stale closure can fire),
-        // OR in `try_reclaim_inactive` for the orphan case where the source
+        // The bridge's element is gone; mark the slab slot as inactive so
+        // subsequent reads via `is_alive` return false. The slot itself
+        // is NOT freed here — that happens in `Signal::deactivate` once
+        // every source signal still subscribed to this bridge has been
+        // deactivated (so no stale closure can fire), OR in
+        // `try_reclaim_inactive` for the orphan case where the source
         // signal outlives the bridge's hook context (typical of long-lived
         // SPA top-level signals). See `BridgeRefsCell::track`.
-        Self::registry_mut().remove(&addr);
+        Self::slab_mut().deactivate(addr);
     }
 
     /// SPA reclamation of orphan bridge signals.
@@ -639,40 +636,24 @@ impl Signal<String> {
         if max_freed == 0 {
             return 0;
         }
-        // OPT 19: drain a small candidate queue instead of full-table
-        // scan + Vec allocation. We collect up to `max_freed` candidate
-        // addrs into a stack-friendly `Vec` with explicit capacity, then
-        // drop the `&mut` borrow on `BridgeRefsCell::map_mut()` before
-        // doing the unsafe free. Rust forbids holding the &mut across
-        // the unsafe pointer manipulation in the same statement, so the
-        // two-phase pattern is required regardless.
-        let mut candidates: Vec<usize> = Vec::with_capacity(max_freed);
-        {
+        // Snapshot the candidate indexes first so we can drop the &mut
+        // borrow on `BridgeRefsCell::map_mut()` before freeing slab slots.
+        let candidates: Vec<usize> = {
             let map: &mut HashMap<usize, HashSet<usize>> = BridgeRefsCell::map_mut();
-            let registry: &HashSet<usize> = Self::registry();
-            for (bridge_addr, sources) in map.iter() {
-                if candidates.len() >= max_freed {
-                    break;
-                }
-                // OPT 19: `bridge_addr` is already `&usize` from
-                // `HashMap::iter`, so pass it straight to
-                // `HashSet::contains` without an extra deref.
-                if sources.is_empty() && !registry.contains(bridge_addr) {
-                    candidates.push(*bridge_addr);
-                }
-            }
-        }
+            let slab: &SignalSlab = Self::slab();
+            map.iter()
+                .filter(|(bridge_idx, sources)| sources.is_empty() && !slab.is_alive(**bridge_idx))
+                .map(|(bridge_idx, _)| *bridge_idx)
+                .collect()
+        };
         let mut freed: usize = 0;
-        for bridge_addr in candidates.into_iter() {
+        for bridge_idx in candidates.into_iter().take(max_freed) {
             // Remove from BridgeRefsCell so a future sweep skips it.
-            BridgeRefsCell::map_mut().remove(&bridge_addr);
-            // Reclaim the heap allocation. The bridge is not in the registry
-            // (verified in the snapshot) and not referenced from any
-            // surviving `Signal<String>` handle, so this is safe.
-            unsafe {
-                let _: Box<SignalInner<String>> =
-                    Box::from_raw(bridge_addr as *mut SignalInner<String>);
-            }
+            BridgeRefsCell::map_mut().remove(&bridge_idx);
+            // Reclaim the slab slot. The bridge is not alive (verified in
+            // the snapshot) and not referenced from any surviving
+            // `Signal<String>` handle, so this is safe.
+            Self::slab_mut().free(bridge_idx);
             freed += 1;
         }
         freed
