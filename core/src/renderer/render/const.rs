@@ -6,11 +6,13 @@ use super::*;
 /// can locate and manage the dynamic content during re-renders and cleanup.
 pub(crate) const DATA_EUV_DYNAMIC_ID: &str = "data-euv-dynamic-id";
 
-/// The DOM attribute name used to store signal inner addresses on an element.
+/// CSS selector that matches every element participating in framework
+/// cleanup (event handlers, dynamic node placeholders, etc.).
 ///
-/// This attribute stores a comma-separated list of signal inner pointer addresses
-/// that are bound to the element, allowing cleanup during DOM subtree removal.
-pub(crate) const DATA_EUV_SIGNAL_ADDRS: &str = "data-euv-signal-addrs";
+/// Used by `cleanup_subtree` so the entire marked subtree can be enumerated
+/// in a single `query_selector_all` JS-boundary crossing, replacing the
+/// previous per-element `get_attribute` × N recursion.
+pub(crate) const EUV_CLEANUP_SELECTOR: &str = "[data-euv-id],[data-euv-dynamic-id]";
 
 /// The HTML tag name used for fragment placeholder elements.
 ///

@@ -1285,36 +1285,48 @@ impl Renderer {
     /// `NodeRef::get()` returns `None` once the underlying DOM subtree is
     /// gone (previously the `NodeRef` could return a stale `JsValue`).
     ///
+    /// OPT 13: a single `query_selector_all(EUV_CLEANUP_SELECTOR)` enumerates
+    /// every element in the subtree that participates in framework cleanup
+    /// (carries `data-euv-id` or `data-euv-dynamic-id`). This replaces the
+    /// previous per-element `get_attribute` × 4 + recursive child-walk —
+    /// for a tree of M marked elements the cleanup cost drops from
+    /// `4M + M` JS-boundary crossings to a single `query_selector_all`
+    /// crossing, with the rest of the work iterating the returned
+    /// `NodeList` in pure Rust.
+    ///
+    /// Signal addresses are read from the Rust-side
+    /// [`crate::renderer::signal_addrs::SignalAddrs`] registry, never
+    /// from a DOM attribute.
+    ///
     /// # Arguments
     ///
     /// - `&Element` - The DOM element to clean up.
     fn cleanup_subtree(element: &Element) {
-        if let Some(euv_id_str) = element.get_attribute(DATA_EUV_ID)
-            && let Ok(euv_id) = euv_id_str.parse::<usize>()
-        {
-            Registry::cleanup_element(euv_id);
-            // NP-3: also drain the `NodeRef` registry so any handle that
-            // captured this element sees `None` again.
-            Registry::cleanup_noderefs(euv_id);
-        }
-        if let Some(dynamic_id_str) = element.get_attribute(DATA_EUV_DYNAMIC_ID)
-            && let Ok(dynamic_id) = dynamic_id_str.parse::<usize>()
-        {
-            Registry::cleanup_dynamic_node(dynamic_id);
-        }
-        if let Some(signal_addrs_str) = element.get_attribute(DATA_EUV_SIGNAL_ADDRS) {
-            signal_addrs_str
-                .split(CHAR_SIGNAL_ADDRS_SEPARATOR)
-                .filter_map(|addr_str: &str| addr_str.parse::<usize>().ok())
-                .for_each(Signal::<String>::clear_listeners);
-        }
-        let child_nodes: NodeList = element.child_nodes();
-        let length: u32 = child_nodes.length();
-        for child_index in 0..length {
-            if let Some(child) = child_nodes.get(child_index)
-                && let Some(child_element) = child.dyn_ref::<Element>()
+        let Ok(marked) = element.query_selector_all(EUV_CLEANUP_SELECTOR) else {
+            return;
+        };
+        let length: u32 = marked.length();
+        for index in 0..length {
+            let Some(node) = marked.get(index) else {
+                continue;
+            };
+            let Some(marked_element) = node.dyn_ref::<Element>() else {
+                continue;
+            };
+            if let Some(euv_id_str) = marked_element.get_attribute(DATA_EUV_ID)
+                && let Ok(euv_id) = euv_id_str.parse::<usize>()
             {
-                Self::cleanup_subtree(child_element);
+                Registry::cleanup_element(euv_id);
+                if let Some(addrs) = SignalAddrs::take(euv_id) {
+                    for addr in addrs {
+                        Signal::<String>::clear_listeners(addr);
+                    }
+                }
+            }
+            if let Some(dynamic_id_str) = marked_element.get_attribute(DATA_EUV_DYNAMIC_ID)
+                && let Ok(dynamic_id) = dynamic_id_str.parse::<usize>()
+            {
+                Registry::cleanup_dynamic_node(dynamic_id);
             }
         }
     }
