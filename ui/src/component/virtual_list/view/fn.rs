@@ -30,13 +30,18 @@ pub fn euv_virtual_list(node: VirtualNode<EuvVirtualListProps>) -> VirtualNode {
     if viewport_height == 0 {
         state.schedule_measure_by_id(&container_id);
     }
+    // OPT-24: cache the container Element via NodeRef so the scroll
+    // handler avoids `get_element_by_id` + `dyn_into<HtmlElement>` on
+    // every scroll event. The `ref:` attribute on the container div
+    // populates this once the renderer mounts the node.
+    let container_ref: NodeRef<Element> = App::use_node_ref();
     let scroll_handler: Option<Rc<dyn Fn(Event)>> = {
         let state: UseVirtualList = state;
-        let container_id: String = container_id.clone();
+        let container_ref: NodeRef<Element> = container_ref.clone();
         let on_scroll: Option<VirtualListScrollHandler> = on_scroll;
         Some(Rc::new(move |_: Event| {
-            if let Some(element) = UseVirtualList::try_get_container_by_id(&container_id) {
-                let html_element: HtmlElement = element.unchecked_into();
+            if let Some(element_value) = container_ref.get() {
+                let html_element: HtmlElement = element_value.unchecked_into();
                 let scroll_offset: i32 = html_element.scroll_top();
                 state.get_scroll_offset().set(scroll_offset);
                 if let Some(ref callback) = on_scroll {
@@ -88,13 +93,25 @@ pub fn euv_virtual_list(node: VirtualNode<EuvVirtualListProps>) -> VirtualNode {
     }
     let total_height: i32 = total_count as i32 * item_height;
     let top_padding: i32 = render_start as i32 * item_height;
+    // OPT-24: build the per-render style strings once (not once per
+    // visible item). The previous version called `format!()` three
+    // times per visible item per scroll frame, allocating 150 Strings
+    // per frame at 50 visible items. Now we build 3 Strings per render
+    // and reuse their `&str` slices via `style` interpolation.
+    let item_height_style: String = format!("height: {item_height}px; box-sizing: border-box;");
+    let item_height_style_ref: &str = item_height_style.as_str();
+    let row_wrapper_style: String =
+        format!("position: absolute; top: {top_padding}px; left: 0; right: 0;");
+    let row_wrapper_style_ref: &str = row_wrapper_style.as_str();
+    let scroll_spacer_style: String = format!("position: relative; height: {total_height}px;");
+    let scroll_spacer_style_ref: &str = scroll_spacer_style.as_str();
     let children: Vec<VirtualNode> = (render_start..render_end)
         .map(|index: usize| {
             let item_node: VirtualNode = (item_renderer)(index);
             html! {
                 div {
                     key: index.to_string()
-                    style: format!("height: {item_height}px; box-sizing: border-box;")
+                    style: item_height_style_ref
                     item_node
                 }
             }
@@ -104,11 +121,12 @@ pub fn euv_virtual_list(node: VirtualNode<EuvVirtualListProps>) -> VirtualNode {
         div {
             class: c_virtual_list_container()
             id: container_id
+            ref: container_ref
             onscroll: scroll_handler
             div {
-                style: format!("position: relative; height: {total_height}px;")
+                style: scroll_spacer_style_ref
                 div {
-                    style: format!("position: absolute; top: {top_padding}px; left: 0; right: 0;")
+                    style: row_wrapper_style_ref
                     children
                 }
             }
