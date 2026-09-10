@@ -1,4 +1,5 @@
 mod dom;
+mod dom_ops;
 mod registry;
 mod render;
 mod signal_addrs;
