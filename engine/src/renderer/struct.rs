@@ -318,6 +318,91 @@ pub struct WebGpuRenderer {
     /// the next frame.
     #[get(type(clone))]
     pub(crate) command_encoder: Option<JsValue>,
+    /// OPT 34: cached render-pass descriptor, allocated lazily on the
+    /// first call to [`WebGpuRenderer::begin_render_pass_full`].
+    ///
+    /// The pre-WebGPU-audit path allocated a fresh `Object` +
+    /// `Array` + 8-15 `Reflect::set` calls every frame, even though
+    /// only the `clearValue` actually changes. We keep the descriptor
+    /// Object alive for the renderer's lifetime, mutating only the
+    /// fields whose values differ from the last call. The cache
+    /// invalidates itself automatically when `load_op` / `store_op`
+    /// or the depth-stencil shape changes.
+    ///
+    /// `None` until the first `begin_render_pass_full` call; `Some(_)`
+    /// afterwards and persists for the lifetime of the renderer.
+    #[get(type(clone))]
+    pub(crate) render_pass_descriptor_cache: Option<RenderPassDescriptorCache>,
+}
+
+/// OPT 34: persistent render-pass descriptor and its inner
+/// attachments, reused across `begin_render_pass_full` calls.
+///
+/// # Why
+///
+/// `begin_render_pass_full` historically allocated a fresh descriptor
+/// `Object`, a `colorAttachments` `Array`, and one inner
+/// `color_attachment` `Object` (plus an optional `clearValue` `Object`)
+/// on every frame, then ran 8-15 `Reflect::set` calls to populate
+/// them. WebGPU re-validates the descriptor each call, but the JS-side
+/// `Object` / `Array` allocations and the per-property `Reflect::set`
+/// crossings are pure overhead — only the `clearValue` and (rarely)
+/// `view` / `loadOp` / `storeOp` fields change between frames.
+///
+/// # What we cache
+///
+/// - The top-level descriptor `Object` (the one passed to
+///   `beginRenderPass`).
+/// - The `colorAttachments` `Array` (always exactly one element —
+///   we keep the same `Array` reference and mutate its slot 0 in
+///   place).
+/// - The inner color attachment `Object` (slot 0 of
+///   `colorAttachments`).
+/// - The `clearValue` `Object` (the `{r, g, b, a}` dictionary that
+///   is the actual per-frame mutating field).
+/// - Last-applied `loadOp` / `storeOp` string slices, to detect when
+///   the caller switched ops and the cached descriptor must be
+///   rebuilt (rare; WebGPU does not hot-swap ops every frame).
+/// - Last-applied depth-stencil shape (present / absent), to detect
+///   when the depth-stencil shape changes.
+///
+/// # Invalidation
+///
+/// The cache is invalidated (rebuilt from scratch) when any of:
+/// - `load_op` changes between calls,
+/// - `store_op` changes between calls,
+/// - the depth-stencil shape changes (None → Some / Some → None).
+///
+/// These are all `&'static str` (they come from `WEBGPU_*_OP_*`
+/// constants), so invalidation is a pointer-compare.
+///
+/// `Clone` is derived so the parent `WebGpuRenderer`'s `Data` derive
+/// (which adds a `Clone` bound on every field) keeps compiling;
+/// `js_sys::Object` and `js_sys::Array` both derive `Clone`, so the
+/// derived `Clone` impl just clones the inner JS-side references
+/// (cheap, no JS allocation).
+#[derive(Clone, Debug)]
+pub(crate) struct RenderPassDescriptorCache {
+    /// The cached top-level `GpuRenderPassDescriptor` Object.
+    /// Pass directly to `encoder.beginRenderPass(descriptor)`.
+    pub(crate) descriptor: Object,
+    /// The cached inner color attachment Object.
+    /// `descriptor.colorAttachments[0]` in JS terms.
+    pub(crate) attachment: Object,
+    /// The cached `clearValue` Object (the `{r, g, b, a}` dictionary
+    /// under `attachment.clearValue`). The hot-path field — only
+    /// this is mutated on most frames.
+    pub(crate) clear_value: Object,
+    /// Last applied `loadOp` (as a `&'static str`). Used to detect
+    /// op changes that invalidate the descriptor.
+    pub(crate) last_load_op: Option<&'static str>,
+    /// Last applied `storeOp` (as a `&'static str`). Used to detect
+    /// op changes that invalidate the descriptor.
+    pub(crate) last_store_op: Option<&'static str>,
+    /// Whether the last applied descriptor had a depth-stencil
+    /// attachment (`true`) or not (`false`). Used to detect shape
+    /// changes that invalidate the descriptor.
+    pub(crate) last_has_depth: bool,
 }
 
 /// Describes a 2D viewport rectangle plus optional depth range, in the same
