@@ -1155,6 +1155,71 @@ pub(crate) fn emit_once_lock_fn(
     });
 }
 
+/// Generates a parameterized class function body that caches its result.
+///
+/// Each call-site that has parameters gets its own `OnceLock<RefCell<HashMap>>`
+/// keyed by `(macro_name, format!("{:?}", params))`. Cache hits skip the
+/// `Css::new` String allocations (name + style + selector + at-rule) and the
+/// `inject_style` `HashSet` lookup. The cache lives in the consumer's binary
+/// (not the proc-macro crate), so test runs don't leak across processes.
+///
+/// # Arguments
+///
+/// - `&mut proc_macro2::TokenStream` - The target token stream to append to.
+/// - `&Visibility` - The visibility modifier for the generated function.
+/// - `&proc_macro2::TokenStream` - The function name token.
+/// - `proc_macro2::Span` - The span of the function name (for the const identifier).
+/// - `&str` - The base class name string used as the first cache key component.
+/// - `&[proc_macro2::TokenStream]` - The parameter names (used to build the Debug tuple).
+/// - `&proc_macro2::TokenStream` - Token stream producing the unique class-name expression.
+/// - `&proc_macro2::TokenStream` - Token stream producing the CSS style string.
+/// - `&proc_macro2::TokenStream` - Token stream producing the selector rules vector.
+/// - `&proc_macro2::TokenStream` - Token stream producing the at-rule rules vector.
+/// - `&[proc_macro2::TokenStream]` - The parameter definitions (name: type).
+/// - `Option<&syn::Generics>` - The generic parameters and where clause.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_param_css_cache_fn(
+    tokens: &mut proc_macro2::TokenStream,
+    visibility: &Visibility,
+    fn_name_token: &proc_macro2::TokenStream,
+    fn_name_span: proc_macro2::Span,
+    class_name_str: &str,
+    param_names: &[proc_macro2::TokenStream],
+    unique_name_expr: &proc_macro2::TokenStream,
+    style_expr: &proc_macro2::TokenStream,
+    selector_expr: &proc_macro2::TokenStream,
+    at_rule_expr: &proc_macro2::TokenStream,
+    param_defs: &[proc_macro2::TokenStream],
+    generics: &syn::Generics,
+) {
+    let const_name: Ident = Ident::new(
+        &format!("{}_PARAM_CACHE", class_name_str.to_uppercase()),
+        fn_name_span,
+    );
+    let const_name_token: proc_macro2::TokenStream = quote! { #const_name };
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+    let param_debug_tuple: proc_macro2::TokenStream = quote! { ( #( #param_names ), * ) };
+    let key_expr: proc_macro2::TokenStream =
+        quote! { ( #class_name_str.to_string(), format!("{:?}", #param_debug_tuple)) };
+    tokens.extend(quote! {
+        #visibility fn #fn_name_token #impl_generics(#(#param_defs), *) -> ::euv::Css #where_clause #ty_generics {
+            static #const_name_token: ::std::sync::OnceLock<
+                ::std::sync::Mutex<::std::collections::HashMap<(String, String), ::euv::Css>>,
+            > = ::std::sync::OnceLock::new();
+            let cache: &::std::sync::Mutex<::std::collections::HashMap<(String, String), ::euv::Css>> =
+                #const_name_token.get_or_init(|| ::std::sync::Mutex::new(::std::collections::HashMap::new()));
+            let key: (String, String) = #key_expr;
+            if let Some(cached) = cache.lock().expect("PARAM_CSS_CACHE poisoned").get(&key) {
+                return cached.clone();
+            }
+            let css: ::euv::Css = ::euv::Css::new(#unique_name_expr, #style_expr, #selector_expr, #at_rule_expr);
+            css.inject_style();
+            cache.lock().expect("PARAM_CSS_CACHE poisoned").insert(key, css.clone());
+            css
+        }
+    });
+}
+
 /// Reconstructs a CSS media query string from a raw `proc_macro2::TokenStream`.
 ///
 /// Unlike `reconstruct_ident_from_tokens` which only handles identifiers and

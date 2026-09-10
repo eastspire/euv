@@ -333,11 +333,27 @@ impl ToTokens for ClassDef {
                 } else {
                     quote! { [#(#all_css_parts), *].concat() }
                 };
-                tokens.extend(quote! {
-                    #visibility fn #name #generics(#(#param_defs), *) -> ::euv::Css #where_clause {
-                        ::euv::Css::new(#unique_name_expr, #style_expr, #selector_expr, #at_rule_expr)
-                    }
-                });
+                let param_idents: Vec<proc_macro2::TokenStream> = params
+                    .iter()
+                    .map(|param: &ClassParam| {
+                        let param_name: &Ident = param.get_name();
+                        quote! { #param_name }
+                    })
+                    .collect();
+                emit_param_css_cache_fn(
+                    tokens,
+                    visibility,
+                    &quote! { #name },
+                    name.span(),
+                    &class_name_str,
+                    &param_idents,
+                    &unique_name_expr,
+                    &style_expr,
+                    &selector_expr,
+                    &at_rule_expr,
+                    &param_defs,
+                    generics,
+                );
             }
             None => {
                 let name_span: Span = name.span();
