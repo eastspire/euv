@@ -1477,19 +1477,18 @@ pub(crate) fn strip_braces_from_expr(expr: &Expr) -> &Expr {
 /// change, the conditional is re-evaluated.
 ///
 /// The `mode` parameter controls how branch bodies are emitted:
-/// - `AttrIfMode::Reactive` - Each branch body is wrapped in
-///   `::euv::IntoReactiveString::into_reactive_string(...)` so that all branches
-///   produce a `String` regardless of their original type (e.g., `Css`, `&str`, `String`).
-///   This ensures type compatibility when the `if` and implicit `else` branches
-///   return different types.
+/// - `AttrIfMode::Reactive` - Each branch body is wrapped with `.to_string()`
+///   so the closure returns `String` for `AttributeValue::reactive`'s
+///   `Fn() -> String + 'static` contract. For branch bodies that are
+///   already `&'static str` string literals, `String::from(<lit>)` is
+///   emitted directly so the codegen is identical to a literal-driven
+///   `String` construction (no `Display` trait dispatch).
 /// - `AttrIfMode::Raw` - Branch bodies are emitted as-is without wrapping.
 ///   Used for component props where branch types are already consistent.
 ///
 /// # Arguments
 ///
-/// - `&HtmlAttrIf` - The parsed attribute-level reactive conditional.
-/// - `proc_macro2::TokenStream` - The default else branch token stream, used when no explicit else branch exists.
-/// - `AttrIfMode` - The code generation mode for branch body wrapping.
+/// - `&AttrIfContext` - The parsed attribute-level reactive conditional, default else, and mode.
 ///
 /// # Returns
 ///
@@ -1505,9 +1504,7 @@ pub(crate) fn attr_if_to_tokens(ctx: &AttrIfContext<'_>) -> proc_macro2::TokenSt
         .is_some_and(|(condition, _, _): &(Option<Expr>, Expr, bool)| condition.is_none());
     for (branch_index, (condition, body, is_reactive)) in html_attr_if.branches.iter().enumerate() {
         let body_tokens: proc_macro2::TokenStream = match mode {
-            AttrIfMode::Reactive => {
-                quote! { (#body).to_string() }
-            }
+            AttrIfMode::Reactive => reactive_body_tokens(body),
             AttrIfMode::Raw => quote! { #body },
         };
         match (branch_index, condition) {
@@ -1538,10 +1535,35 @@ pub(crate) fn attr_if_to_tokens(ctx: &AttrIfContext<'_>) -> proc_macro2::TokenSt
     if_chain
 }
 
+/// Returns a token stream for a `Reactive`-mode branch body that always
+/// evaluates to `String`.
+///
+/// For bodies that are bare `&'static str` string literals (the common
+/// `class: if {cond} {"c_dark"} else {"c_light"}` shape), emit
+/// `String::from(<lit>)` directly so the codegen is identical to a
+/// literal-driven `String` construction (no `Display` trait dispatch).
+/// For all other bodies (Css refs, function calls, blocks, etc.) the
+/// previous `(<body>).to_string()` form is preserved verbatim.
+fn reactive_body_tokens(body: &Expr) -> proc_macro2::TokenStream {
+    if let Expr::Lit(syn::ExprLit {
+        lit: syn::Lit::Str(lit_str),
+        ..
+    }) = body
+    {
+        let span: proc_macro2::Span = lit_str.span();
+        let value: String = lit_str.value();
+        let lit: syn::LitStr = syn::LitStr::new(&value, span);
+        return quote! { ::std::string::String::from(#lit) };
+    }
+    quote! { (#body).to_string() }
+}
+
 /// Generates a token stream for an `HtmlAttrMatch` as a Rust `match` expression.
 ///
 /// The `mode` parameter controls how arm bodies are emitted:
-/// - `AttrIfMode::Reactive` - Each arm body is wrapped with `.to_string()`.
+/// - `AttrIfMode::Reactive` - Each arm body is wrapped with `.to_string()`,
+///   or `String::from(<lit>)` for bare string-literal arms (see
+///   `reactive_body_tokens`).
 /// - `AttrIfMode::Raw` - Arm bodies are emitted as-is without wrapping.
 ///
 /// # Arguments
@@ -1564,9 +1586,7 @@ pub(crate) fn attr_match_to_tokens(
         .iter()
         .map(|(pattern, body): &(proc_macro2::TokenStream, Expr)| {
             let body_tokens: proc_macro2::TokenStream = match mode {
-                AttrIfMode::Reactive => {
-                    quote! { (#body).to_string() }
-                }
+                AttrIfMode::Reactive => reactive_body_tokens(body),
                 AttrIfMode::Raw => quote! { #body },
             };
             quote! { #pattern => #body_tokens, }
