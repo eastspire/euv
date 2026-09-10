@@ -6,10 +6,10 @@ use super::*;
 ///
 /// - `I18n` - A `I18n` value.
 fn fresh_i18n() -> I18n {
+    i18n_reset_for_tests();
     I18n::new(
         Signal::create(String::from("en")),
         Signal::create(String::from("en")),
-        Signal::create(HashMap::new()),
     )
 }
 
@@ -19,19 +19,16 @@ fn fresh_i18n() -> I18n {
 ///
 /// - `I18n` - A `I18n` value.
 fn seeded_i18n() -> I18n {
-    let mut messages: HashMap<String, HashMap<String, String>> = HashMap::new();
-    let mut en: HashMap<String, String> = HashMap::new();
-    en.insert("hello".to_string(), String::from("Hello"));
-    en.insert("goodbye".to_string(), String::from("Goodbye"));
-    let mut zh: HashMap<String, String> = HashMap::new();
-    zh.insert("hello".to_string(), String::from("你好"));
-    messages.insert("en".to_string(), en);
-    messages.insert("zh-CN".to_string(), zh);
-    I18n::new(
+    i18n_reset_for_tests();
+    let i18n: I18n = I18n::new(
         Signal::create(String::from("en")),
         Signal::create(String::from("en")),
-        Signal::create(messages),
-    )
+    );
+    let entries_en: &[MessageEntry] = &[("hello", "Hello"), ("goodbye", "Goodbye")];
+    i18n.add_messages("en", entries_en);
+    let entries_zh: &[MessageEntry] = &[("hello", "你好")];
+    i18n.add_messages("zh-CN", entries_zh);
+    i18n
 }
 
 #[test]
@@ -156,10 +153,10 @@ fn add_messages_inserts_new_locale_set_path() {
     let ran: bool = catch_unwind(AssertUnwindSafe(|| {
         let entries: &[MessageEntry] = &[("hello", "Bonjour"), ("goodbye", "Au revoir")];
         i18n.add_messages("fr", entries);
+        i18n.change_locale("fr");
     }))
     .is_ok();
     if ran {
-        i18n.change_locale("fr");
         assert_eq!(i18n.t("hello"), "Bonjour");
         assert_eq!(i18n.t("goodbye"), "Au revoir");
     }
@@ -244,15 +241,13 @@ fn remove_message_absent_key_is_noop_set_path() {
 
 #[test]
 fn t_with_substitutes_placeholders_in_pre_registered_messages() {
-    let mut messages: HashMap<String, HashMap<String, String>> = HashMap::new();
-    let mut en: HashMap<String, String> = HashMap::new();
-    en.insert("greet".to_string(), String::from("Hello, {name}!"));
-    messages.insert("en".to_string(), en);
+    i18n_reset_for_tests();
     let i18n: I18n = I18n::new(
         Signal::create(String::from("en")),
         Signal::create(String::from("en")),
-        Signal::create(messages),
     );
+    let entries: &[MessageEntry] = &[("greet", "Hello, {name}!")];
+    i18n.add_messages("en", entries);
     let mut vars: HashMap<&'static str, &'static str> = HashMap::new();
     vars.insert("name", "Alice");
     assert_eq!(i18n.t_with("greet", &vars), "Hello, Alice!");
@@ -260,30 +255,26 @@ fn t_with_substitutes_placeholders_in_pre_registered_messages() {
 
 #[test]
 fn t_with_leaves_missing_placeholders_as_literal_tokens() {
-    let mut messages: HashMap<String, HashMap<String, String>> = HashMap::new();
-    let mut en: HashMap<String, String> = HashMap::new();
-    en.insert("greet".to_string(), String::from("Hello, {name}!"));
-    messages.insert("en".to_string(), en);
+    i18n_reset_for_tests();
     let i18n: I18n = I18n::new(
         Signal::create(String::from("en")),
         Signal::create(String::from("en")),
-        Signal::create(messages),
     );
+    let entries: &[MessageEntry] = &[("greet", "Hello, {name}!")];
+    i18n.add_messages("en", entries);
     let vars: HashMap<&'static str, &'static str> = HashMap::new();
     assert_eq!(i18n.t_with("greet", &vars), "Hello, {name}!");
 }
 
 #[test]
 fn t_with_substitutes_multiple_placeholders() {
-    let mut messages: HashMap<String, HashMap<String, String>> = HashMap::new();
-    let mut en: HashMap<String, String> = HashMap::new();
-    en.insert("ordered".to_string(), String::from("{greeting}, {name}!"));
-    messages.insert("en".to_string(), en);
+    i18n_reset_for_tests();
     let i18n: I18n = I18n::new(
         Signal::create(String::from("en")),
         Signal::create(String::from("en")),
-        Signal::create(messages),
     );
+    let entries: &[MessageEntry] = &[("ordered", "{greeting}, {name}!")];
+    i18n.add_messages("en", entries);
     let mut vars: HashMap<&'static str, &'static str> = HashMap::new();
     vars.insert("greeting", "你好");
     vars.insert("name", "Alice");
@@ -292,15 +283,13 @@ fn t_with_substitutes_multiple_placeholders() {
 
 #[test]
 fn t_with_supports_underscored_placeholder_names() {
-    let mut messages: HashMap<String, HashMap<String, String>> = HashMap::new();
-    let mut en: HashMap<String, String> = HashMap::new();
-    en.insert("greet".to_string(), String::from("Hi, {first_name}!"));
-    messages.insert("en".to_string(), en);
+    i18n_reset_for_tests();
     let i18n: I18n = I18n::new(
         Signal::create(String::from("en")),
         Signal::create(String::from("en")),
-        Signal::create(messages),
     );
+    let entries: &[MessageEntry] = &[("greet", "Hi, {first_name}!")];
+    i18n.add_messages("en", entries);
     let mut vars: HashMap<&'static str, &'static str> = HashMap::new();
     vars.insert("first_name", "Alice");
     assert_eq!(i18n.t_with("greet", &vars), "Hi, Alice!");

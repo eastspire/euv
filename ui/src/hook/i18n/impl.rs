@@ -1,5 +1,14 @@
 use super::*;
 
+/// Returns the process-wide messages lock, initialising it
+/// on first call.
+///
+/// All i18n reads and writes route through this helper so
+/// the lazy-init logic stays in one place.
+fn messages_lock() -> &'static RwLock<HashMap<String, HashMap<String, String>>> {
+    I18N_MESSAGES.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
 /// Implements [`HookContextI18nExt`] for [`HookContext`].
 impl HookContextI18nExt for HookContext {
     /// Returns a fresh [`I18n`] bound to the current component scope.
@@ -12,7 +21,6 @@ impl HookContextI18nExt for HookContext {
             I18n::new(
                 Signal::create(String::from("en")),
                 Signal::create(String::from("en")),
-                Signal::create(HashMap::new()),
             )
         })
     }
@@ -55,46 +63,62 @@ impl I18n {
     /// translation table for `locale`. Existing entries
     /// for that locale are overwritten (last-write-wins).
     ///
+    /// OPT 22 (tail): writes through the process-wide
+    /// [`I18N_MESSAGES`] lock instead of cloning the whole
+    /// table out of a `Signal` and re-setting it.
+    ///
     /// # Arguments
     ///
     /// - `&str` - Shared reference to a `str`.
     /// - `&[MessageEntry]` - Shared reference to a `[MessageEntry]`.
     pub fn add_messages(&self, locale: &str, entries: &[MessageEntry]) {
-        let mut table: HashMap<String, HashMap<String, String>> = self.get_messages().get();
-        let entry_map: &mut HashMap<String, String> = table.entry(locale.to_string()).or_default();
+        let mut guard: std::sync::RwLockWriteGuard<
+            'static,
+            HashMap<String, HashMap<String, String>>,
+        > = messages_lock().write().unwrap_or_else(|e| e.into_inner());
+        let entry_map: &mut HashMap<String, String> = guard.entry(locale.to_string()).or_default();
         for (key, value) in entries {
             entry_map.insert((*key).to_string(), (*value).to_string());
         }
-        self.get_messages().set(table);
     }
 
     /// Removes every entry for `locale`. After this
     /// call, `t(key)` for any key will skip this locale
     /// in its lookup chain.
     ///
+    /// OPT 22 (tail): see `add_messages` — writes through
+    /// the static lock.
+    ///
     /// # Arguments
     ///
     /// - `&str` - Shared reference to a `str`.
     pub fn remove_locale(&self, locale: &str) {
-        let mut table: HashMap<String, HashMap<String, String>> = self.get_messages().get();
-        table.remove(locale);
-        self.get_messages().set(table);
+        let mut guard: std::sync::RwLockWriteGuard<
+            'static,
+            HashMap<String, HashMap<String, String>>,
+        > = messages_lock().write().unwrap_or_else(|e| e.into_inner());
+        guard.remove(locale);
     }
 
     /// Removes a single message from a locale. After this
     /// call, `t(key)` for this key in this locale will
     /// fall back to `fallback_locale`.
     ///
+    /// OPT 22 (tail): see `add_messages` — writes through
+    /// the static lock.
+    ///
     /// # Arguments
     ///
     /// - `&str` - Shared reference to a `str`.
     /// - `&str` - Shared reference to a `str`.
     pub fn remove_message(&self, locale: &str, key: &str) {
-        let mut table: HashMap<String, HashMap<String, String>> = self.get_messages().get();
-        if let Some(entry_map) = table.get_mut(locale) {
+        let mut guard: std::sync::RwLockWriteGuard<
+            'static,
+            HashMap<String, HashMap<String, String>>,
+        > = messages_lock().write().unwrap_or_else(|e| e.into_inner());
+        if let Some(entry_map) = guard.get_mut(locale) {
             entry_map.remove(key);
         }
-        self.get_messages().set(table);
     }
 
     /// Translates `key` to a string under the active
@@ -104,8 +128,15 @@ impl I18n {
     ///
     /// This is the reactive read — calling it inside a
     /// render closure subscribes that closure to locale
-    /// changes (and to any subsequent edits to the
-    /// messages map for the active or fallback locale).
+    /// changes. The messages table itself is not reactive
+    /// (it lives behind [`I18N_MESSAGES`]).
+    ///
+    /// OPT 22 (tail): previously the read cloned the
+    /// entire translation table out of a `Signal` on every
+    /// call (a `HashMap<String, HashMap<String, String>>`
+    /// per `t()`). Now the read takes the read guard and
+    /// clones at most a single `String` (the message
+    /// itself) before dropping the guard.
     ///
     /// # Arguments
     ///
@@ -117,29 +148,21 @@ impl I18n {
     pub fn t(&self, key: &str) -> String {
         let active: String = self.get_locale().get();
         let fallback: String = self.get_fallback_locale().get();
-        // OPT 17 + 22 partial: borrow the messages table instead of cloning
-        // the whole outer HashMap. The `t()` function only reads, so a
-        // `Signal::with` (added by this PR) is enough. The full OPT 22
-        // refactor (move messages out of the signal into OnceLock/Rc) is
-        // intentionally deferred — it changes the public `I18n` storage
-        // shape and ripples through every translate site. Borrow-only
-        // inside `t` keeps the API stable.
-        self.get_messages()
-            .with(|table: &HashMap<String, HashMap<String, String>>| {
-                if let Some(message) = table
-                    .get(&active)
-                    .and_then(|m: &HashMap<String, String>| m.get(key))
-                {
-                    return message.clone();
-                }
-                if let Some(message) = table
-                    .get(&fallback)
-                    .and_then(|m: &HashMap<String, String>| m.get(key))
-                {
-                    return message.clone();
-                }
-                key.to_string()
-            })
+        let guard: std::sync::RwLockReadGuard<'static, HashMap<String, HashMap<String, String>>> =
+            messages_lock().read().unwrap_or_else(|e| e.into_inner());
+        if let Some(message) = guard
+            .get(&active)
+            .and_then(|m: &HashMap<String, String>| m.get(key))
+        {
+            return message.clone();
+        }
+        if let Some(message) = guard
+            .get(&fallback)
+            .and_then(|m: &HashMap<String, String>| m.get(key))
+        {
+            return message.clone();
+        }
+        key.to_string()
     }
 
     /// Translates `key` and substitutes `{name}`-style
@@ -169,32 +192,34 @@ impl I18n {
     /// (i.e. the number of distinct keys in the messages
     /// map's outer level).
     ///
+    /// OPT 22 (tail): borrows through [`I18N_MESSAGES`]
+    /// read guard instead of cloning the whole table.
+    ///
     /// # Returns
     ///
     /// - `usize` - Count of registered locales.
     pub fn locale_count(&self) -> usize {
-        // OPT 17: `with` lets us call `.len()` on the borrowed table
-        // without cloning the outer HashMap first.
-        self.get_messages()
-            .with(|table: &HashMap<String, HashMap<String, String>>| table.len())
+        let guard: std::sync::RwLockReadGuard<'static, HashMap<String, HashMap<String, String>>> =
+            messages_lock().read().unwrap_or_else(|e| e.into_inner());
+        guard.len()
     }
 
     /// Returns the number of messages registered for the
     /// active locale.
+    ///
+    /// OPT 22 (tail): borrows through [`I18N_MESSAGES`]
+    /// read guard instead of cloning the whole table.
     ///
     /// # Returns
     ///
     /// - `usize` - Count of currently-registered messages.
     pub fn active_message_count(&self) -> usize {
         let active: String = self.get_locale().get();
-        // OPT 17: see `locale_count` — borrow the table to read its
-        // length instead of cloning the outer HashMap.
-        self.get_messages()
-            .with(|table: &HashMap<String, HashMap<String, String>>| {
-                table
-                    .get(&active)
-                    .map(|m: &HashMap<String, String>| m.len())
-                    .unwrap_or_default()
-            })
+        let guard: std::sync::RwLockReadGuard<'static, HashMap<String, HashMap<String, String>>> =
+            messages_lock().read().unwrap_or_else(|e| e.into_inner());
+        guard
+            .get(&active)
+            .map(|m: &HashMap<String, String>| m.len())
+            .unwrap_or_default()
     }
 }
