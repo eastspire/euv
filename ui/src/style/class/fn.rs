@@ -800,6 +800,13 @@ class! {
     pub c_euv_input_wrapper {
         width: "100%";
         margin: format!("{} 0px", var!(gap-element));
+        // Reserve room for the soft keyboard so the input always sits above
+        // it. The native host (euv-app MainActivity + page-level bridge in
+        // IMMERSIVE_SAFE_AREA_SCRIPT) writes --euv-keyboard-height on
+        // <html>; here we just consume it. Transition smooths the IME show
+        // / hide animation so the layout shift is not jarring.
+        padding-bottom: "var(--euv-keyboard-height, 0px)";
+        transition: "padding-bottom 0.18s ease-out";
     }
 
     pub c_form_label {

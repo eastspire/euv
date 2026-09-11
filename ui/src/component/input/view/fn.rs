@@ -2,7 +2,11 @@ use super::*;
 
 /// A custom input component with label and event handling.
 ///
-/// The label is optional — leave it empty to render an input without a label.
+/// Internally binds `onfocus` and `onblur` so that mobile virtual keyboards
+/// never obscure the field. The handler reads `--euv-keyboard-height`
+/// (provided by the Tauri host / page-level bridge) and scrolls the input
+/// above the IME with a 12px gap. The label is optional — leave it empty to
+/// render an input without a label.
 ///
 /// # Arguments
 ///
@@ -54,6 +58,8 @@ pub fn euv_input(node: VirtualNode<EuvInputProps>) -> VirtualNode {
                 autocomplete: autocomplete
                 class: effective_class
                 oninput: oninput
+                onfocus: UseEuvInput::on_focus_scroll_into_view()
+                onblur: UseEuvInput::on_blur_restore_height()
             }
         }
     }
