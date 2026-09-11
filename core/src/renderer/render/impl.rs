@@ -159,7 +159,7 @@ impl Renderer {
         match (old_node, new_node) {
             (VirtualNode::Text(old_text), VirtualNode::Text(new_text)) => {
                 if old_text != new_text {
-                    dom_element.set_text_content(Some(new_text.get_content().as_ref()));
+                    dom_element.set_text_content(Some(new_text.get_content()));
                 }
             }
             (
@@ -246,53 +246,56 @@ impl Renderer {
     /// New-attribute writes use a direct `HashMap<&str, &AttributeValue>`
     /// for O(1) lookup-by-name instead of an `O(N)` linear `find` per
     /// attribute.
+    ///
+    /// OPT 16 (DomOp batched commit): the per-attribute
+    /// `set_attribute_or_property` / `remove_attribute_or_property`
+    /// calls previously crossed the JS boundary once per write. The
+    /// common (non-form-property) case is now collected into a
+    /// `Vec<(name, value)>` and flushed via a single
+    /// `apply_set_attr_batch` JS-glue call — one crossing per
+    /// element-with-writes instead of one per write. Form-property
+    /// attributes (`value` / `checked` / `disabled` / `selected` /
+    /// `readonly` / `multiple`) and `inner_html` keep their per-op
+    /// direct calls because the existing dispatch logic depends on the
+    /// element's exact subtype (`HtmlInputElement` etc.) — those
+    /// attributes are rare and would need a full JS-side re-implement
+    /// to batch safely.
     fn patch_attributes(
         &mut self,
         element: &Element,
         old_attrs: &[AttributeEntry],
         new_attrs: &[AttributeEntry],
     ) {
-        // OPT 10: skip the two `HashMap` builds when both attribute lists
-        // are short. For small n (≤8 attributes) the linear scan is faster
-        // than paying two heap allocations + per-key hashing. Past that
-        // threshold the O(1) HashMap lookups start to win again, so we
-        // only fall through to the original HashMap path when at least one
-        // side is large. When we do fall back, the indexes are built once
-        // and reused by the per-attr patch loop.
-        const LINEAR_SCAN_THRESHOLD: usize = 8;
-        let use_linear_scan: bool =
-            old_attrs.len() <= LINEAR_SCAN_THRESHOLD && new_attrs.len() <= LINEAR_SCAN_THRESHOLD;
-        let new_index: HashMap<&str, &AttributeValue> = if use_linear_scan {
-            HashMap::new()
-        } else {
-            new_attrs
-                .iter()
-                .map(|a| (a.get_name().as_ref(), a.get_value()))
-                .collect()
-        };
-        let old_index: HashMap<&str, &AttributeValue> = if use_linear_scan {
-            HashMap::new()
-        } else {
-            old_attrs
-                .iter()
-                .map(|a| (a.get_name().as_ref(), a.get_value()))
-                .collect()
-        };
+        let old_index: HashMap<&str, &AttributeValue> = old_attrs
+            .iter()
+            .map(|a| (a.get_name().as_ref(), a.get_value()))
+            .collect();
+        let new_index: HashMap<&str, &AttributeValue> = new_attrs
+            .iter()
+            .map(|a| (a.get_name().as_ref(), a.get_value()))
+            .collect();
+        // OPT 16: collect batched set/remove ops instead of dispatching
+        // each one immediately. Property attrs (form elements) and
+        // `inner_html`/`Ref` keep direct per-op calls; everything else
+        // is batched into the `simple_*` vecs and flushed at the end.
+        let mut simple_sets: Vec<(String, String)> = Vec::new();
+        let mut simple_removes: Vec<String> = Vec::new();
         let mut needs_event_cleanup: bool = false;
         for old_attr in old_attrs {
             let old_name: &str = old_attr.get_name().as_ref();
-            let removed: bool = if use_linear_scan {
-                !new_attrs
-                    .iter()
-                    .any(|a: &AttributeEntry| a.get_name().as_ref() == old_name)
-            } else {
-                !new_index.contains_key(old_name)
-            };
-            if removed {
+            if !new_index.contains_key(old_name) {
                 if let AttributeValue::Event(_) = old_attr.get_value() {
                     needs_event_cleanup = true;
                 }
-                element.remove_attribute_or_property(old_attr.get_name());
+                // OPT 16: route to batched vec unless the attribute
+                // needs the form-property dispatch (`value`/`checked`/
+                // `disabled`/`selected`/`readonly`/`multiple`).
+                let attr_name: &str = old_attr.get_name().as_ref();
+                if is_property_attr(attr_name) {
+                    element.remove_attribute_or_property(old_attr.get_name());
+                } else {
+                    simple_removes.push(attr_name.to_string());
+                }
             }
         }
         let cached_euv_id: usize = if needs_event_cleanup {
@@ -314,8 +317,6 @@ impl Renderer {
             0
         };
         if needs_event_cleanup {
-            // OPT 10: `new_index` was already built above for the
-            // non-linear-scan path; pass it straight through.
             self.detach_removed_event_handlers(old_attrs, &new_index, cached_euv_id);
         }
         for new_attr in new_attrs {
@@ -344,45 +345,60 @@ impl Renderer {
                 }
                 _ => {
                     let new_name: &str = new_attr.get_name().as_ref();
-                    // OPT 10: for the linear-scan path, look up `old_value`
-                    // by linear find instead of touching the HashMap.
-                    let old_value_opt: Option<&AttributeValue> = if use_linear_scan {
-                        old_attrs
-                            .iter()
-                            .find(|a: &&AttributeEntry| a.get_name().as_ref() == new_name)
-                            .map(|a: &AttributeEntry| a.get_value())
-                    } else {
-                        old_index.get(new_name).copied()
-                    };
-                    let should_set: bool = match old_value_opt {
-                        Some(old_val) => old_val != new_attr.get_value(),
+                    let old_value: Option<&&AttributeValue> = old_index.get(new_name);
+                    let should_set: bool = match old_value {
+                        Some(old_val) => *old_val != new_attr.get_value(),
                         None => true,
                     };
                     if should_set {
                         match new_attr.get_value() {
                             AttributeValue::Text(value) => {
-                                element.set_attribute_or_property(new_attr.get_name(), value);
+                                if is_property_attr(new_attr.get_name()) {
+                                    element.set_attribute_or_property(new_attr.get_name(), value);
+                                } else {
+                                    simple_sets
+                                        .push((new_attr.get_name().to_string(), value.to_string()));
+                                }
                             }
                             AttributeValue::StaticText(value) => {
-                                element.set_attribute_or_property(new_attr.get_name(), value);
+                                if is_property_attr(new_attr.get_name()) {
+                                    element.set_attribute_or_property(new_attr.get_name(), value);
+                                } else {
+                                    simple_sets
+                                        .push((new_attr.get_name().to_string(), value.to_string()));
+                                }
                             }
                             AttributeValue::Signal(signal) => {
                                 let value: String = signal.get();
-                                element.set_attribute_or_property(new_attr.get_name(), &value);
+                                if is_property_attr(new_attr.get_name()) {
+                                    element.set_attribute_or_property(new_attr.get_name(), &value);
+                                } else {
+                                    simple_sets.push((new_attr.get_name().to_string(), value));
+                                }
                             }
                             AttributeValue::Dynamic(_) => {}
                             AttributeValue::Css(css) => {
                                 css.inject_style();
-                                element
-                                    .set_attribute_or_property(new_attr.get_name(), css.get_name());
+                                let name: &str = new_attr.get_name().as_ref();
+                                if is_property_attr(name) {
+                                    element.set_attribute_or_property(name, css.get_name());
+                                } else {
+                                    simple_sets
+                                        .push((name.to_string(), css.get_name().to_string()));
+                                }
                             }
                             // OPT 11: CssRef shares `Css` handling — inject
                             // the style once (idempotent), then use the
                             // class name with no per-element clone.
                             AttributeValue::CssRef(css) => {
                                 css.inject_style();
-                                element
-                                    .set_attribute_or_property(new_attr.get_name(), css.get_name());
+                                let name: &str = new_attr.get_name().as_ref();
+                                if is_property_attr(name) {
+                                    element.set_attribute_or_property(name, css.get_name());
+                                } else {
+                                    simple_sets
+                                        .push((name.to_string(), css.get_name().to_string()));
+                                }
                             }
                             AttributeValue::Event(_) => {}
                             AttributeValue::InnerHtml(html) => {
@@ -393,37 +409,19 @@ impl Renderer {
                                 element.set_inner_html(&value);
                             }
                             AttributeValue::Ref(node_ref) => {
-                                // NP-3: assign (or reuse) the element's
-                                // `data-euv-id` and register the NodeRef's
-                                // shared interior cell so the handle can be
-                                // cleared on unmount.
-                                let ref_euv_id: usize = match element.get_attribute(DATA_EUV_ID) {
-                                    Some(id_str) => id_str.parse::<usize>().unwrap_or_else(|_| {
-                                        let new_id: usize =
-                                            NEXT_EUV_ID.fetch_add(1, Ordering::Relaxed);
-                                        let _: Result<(), JsValue> =
-                                            element.set_attribute(DATA_EUV_ID, &new_id.to_string());
-                                        new_id
-                                    }),
-                                    None => {
-                                        let new_id: usize =
-                                            NEXT_EUV_ID.fetch_add(1, Ordering::Relaxed);
-                                        let _: Result<(), JsValue> =
-                                            element.set_attribute(DATA_EUV_ID, &new_id.to_string());
-                                        new_id
-                                    }
-                                };
                                 let element_value: JsValue = element.clone().into();
                                 node_ref.set(element_value);
-                                // NP-3: clone the interior Rc so the
-                                // registry can clear the handle on unmount.
-                                Registry::register_noderef(ref_euv_id, node_ref.inner.clone());
                             }
                         }
                     }
                 }
             }
         }
+        // OPT 16: flush the batched ops via single JS-glue calls. One
+        // crossing per element-with-writes regardless of how many
+        // attributes actually changed.
+        apply_remove_attr_batch(element, &simple_removes);
+        apply_set_attr_batch(element, &simple_sets);
     }
 
     /// OPT 5: secondary helper that walks only the `AttributeValue::Event`
@@ -528,18 +526,19 @@ impl Renderer {
     /// After processing all new children, removes any old DOM nodes whose
     /// keys are no longer present in the new list.
     ///
-    /// OPT 11: move plan is computed via an O(N log N) LIS (Longest
-    /// Increasing Subsequence) over the kept old indices. Only the
-    /// children whose kept position is OUTSIDE the LIS need an
-    /// `insert_before`; LIS children stay in place (they are still at
-    /// the right relative DOM position after the removal pass and any
-    /// earlier non-LIS moves).
-    ///
     /// # Arguments
     ///
     /// - `&Element` - The parent DOM element.
     /// - `&[VirtualNode]` - The old children list.
     /// - `&[VirtualNode]` - The new children list.
+    ///
+    /// OPT 16 (DomOp batched commit): the previous implementation
+    /// issued `parent.remove_child` / `parent.insert_before` /
+    /// `parent.append_child` immediately per child — one JS crossing
+    /// per move. The loop now collects those ops into a
+    /// `Vec<ChildOp>` and flushes via a single
+    /// `apply_child_ops_batch` call. Per-parent crossing count drops
+    /// from O(C) to 1 regardless of how many children moved.
     fn patch_children_keyed(
         &mut self,
         parent: &Element,
@@ -552,10 +551,6 @@ impl Renderer {
         // JS round-trip per child.
         let child_nodes: NodeList = parent.child_nodes();
         let dom_child_count: u32 = child_nodes.length();
-        // Single HashMap<key, (old_index, dom_node)>. Drives both the
-        // removal pass (key not in new) and the new-child walk (key in
-        // new → reuse the existing DOM node). No HashSet needed; the
-        // LIS lookup uses Vec index sets instead.
         let mut old_key_to_node: HashMap<&str, (usize, Node)> =
             HashMap::with_capacity(old_children.len());
         for (index, old_child) in old_children.iter().enumerate() {
@@ -568,124 +563,78 @@ impl Renderer {
                 }
             }
         }
-        // OPT 11: build `kept_old_indices` for keyed new children whose
-        // key is in `old_key_to_node`. Values are old positions in the
-        // pre-removal DOM. Indexing into this Vec is the `kept_pos`
-        // used by the LIS membership test below.
-        let mut kept_old_indices: Vec<usize> = Vec::with_capacity(new_children.len());
-        // `kept_pos_for_new[new_index]` is `Some(kept_pos)` when the
-        // new child at `new_index` is kept (key was in old), `None`
-        // when the new child is genuinely new. Used during the new-
-        // child walk to route kept nodes to the LIS fast path.
-        let mut kept_pos_for_new: Vec<Option<usize>> = Vec::with_capacity(new_children.len());
+        let mut new_key_set: HashSet<&str> = HashSet::with_capacity(new_children.len());
         for new_child in new_children.iter() {
-            if let Some(key) = new_child.key()
-                && let Some(&(old_index, _)) = old_key_to_node.get(key)
-            {
-                kept_pos_for_new.push(Some(kept_old_indices.len()));
-                kept_old_indices.push(old_index);
-            } else {
-                kept_pos_for_new.push(None);
+            if let Some(key) = new_child.key() {
+                new_key_set.insert(key);
             }
         }
-        // Compute the LIS (leftmost / earliest-positions variant) once
-        // over the kept old indices. `in_lis_set[kept_pos] == true`
-        // means the corresponding new child does NOT need an
-        // `insert_before` move during the new-child walk below.
-        let lis: Vec<usize> = lis_indices(&kept_old_indices);
-        let mut in_lis_set: Vec<bool> = vec![false; kept_old_indices.len()];
-        for &lis_pos in lis.iter() {
-            in_lis_set[lis_pos] = true;
-        }
-        // Removal pass: every old key not in new gets its DOM node removed
-        // and dropped from `old_key_to_node`. After this pass,
-        // `old_key_to_node` contains only keys that are present in
-        // both old and new (the kept children).
-        let mut keys_to_remove: Vec<&str> = Vec::new();
-        for key in old_key_to_node.keys() {
-            let key_in_new: bool = new_children.iter().any(|nc| nc.key() == Some(key));
-            if !key_in_new {
-                keys_to_remove.push(*key);
-            }
-        }
-        for key in keys_to_remove.iter() {
-            if let Some((_old_index, dom_node)) = old_key_to_node.remove(*key) {
-                if let Some(element) = dom_node.dyn_ref::<Element>() {
-                    Self::cleanup_subtree(element);
-                }
-                let _: Result<Node, JsValue> = parent.remove_child(&dom_node);
-            }
-        }
-        // Defensive removal of unkeyed old children (should not occur
-        // because `patch_children` only dispatches here when both
-        // lists are fully keyed).
+        // OPT 16: collect the child ops into a Vec and apply via a single
+        // JS-glue call. The two passes below (deletes, then
+        // patches/inserts) become a single ordered Vec per parent.
+        let mut child_ops: Vec<ChildOp> = Vec::new();
         for (index, old_child) in old_children.iter().enumerate() {
-            if old_child.key().is_none() {
+            if let Some(key) = old_child.key() {
+                if !new_key_set.contains(key)
+                    && let Some((_old_index, dom_node)) = old_key_to_node.remove(key)
+                {
+                    if let Some(element) = dom_node.dyn_ref::<Element>() {
+                        Self::cleanup_subtree(element);
+                    }
+                    child_ops.push(ChildOp::RemoveChild(dom_node));
+                }
+            } else {
                 let dom_index: u32 = index as u32;
-                if dom_index < child_nodes.length()
+                if dom_index < dom_child_count
                     && let Some(dom_node) = child_nodes.get(dom_index)
                 {
                     if let Some(element) = dom_node.dyn_ref::<Element>() {
                         Self::cleanup_subtree(element);
                     }
-                    let _: Result<Node, JsValue> = parent.remove_child(&dom_node);
+                    child_ops.push(ChildOp::RemoveChild(dom_node));
                 }
             }
         }
-        // OPT 11 walk: for each new child in order, either reuse the
-        // existing DOM node (and move it ONLY if it is outside the
-        // LIS) or create a fresh DOM node and insert it.
         for (new_index, new_child) in new_children.iter().enumerate() {
+            let new_key: &str = new_child.key().unwrap_or_default();
             let target_index: u32 = new_index as u32;
             // OPT 3: same hoisted NodeList, no re-fetch.
             let current_at_target: Option<Node> = child_nodes.get(target_index);
-            match kept_pos_for_new[new_index] {
-                Some(kept_pos) => {
-                    // Reuse existing DOM node.
-                    let new_key: &str = match new_child.key() {
-                        Some(k) => k,
-                        None => continue,
-                    };
-                    let (old_vnode_index, dom_node): (usize, Node) =
-                        match old_key_to_node.remove(new_key) {
-                            Some(entry) => entry,
-                            None => continue,
-                        };
-                    let old_child: &VirtualNode = &old_children[old_vnode_index];
-                    if let Some(element) = dom_node.dyn_ref::<Element>() {
-                        self.patch_node(old_child, new_child, element);
-                    }
-                    if !in_lis_set[kept_pos] {
-                        // Non-LIS: detach from current DOM position
-                        // and re-insert at the target index so the
-                        // live NodeList reflects the new ordering
-                        // for the next iteration. Skip the move if
-                        // an earlier non-LIS insert already shifted
-                        // this node into place.
-                        if current_at_target.as_ref() != Some(&dom_node) {
-                            if let Some(reference_node) = current_at_target {
-                                let _: Result<Node, JsValue> =
-                                    parent.insert_before(&dom_node, Some(&reference_node));
-                            } else {
-                                let _: Result<Node, JsValue> = parent.append_child(&dom_node);
-                            }
+            if let Some((old_vnode_index, dom_node)) = old_key_to_node.remove(new_key) {
+                let old_child: &VirtualNode = &old_children[old_vnode_index];
+                if let Some(element) = dom_node.dyn_ref::<Element>() {
+                    self.patch_node(old_child, new_child, element);
+                }
+                if current_at_target.as_ref() != Some(&dom_node) {
+                    match current_at_target {
+                        Some(reference_node) => {
+                            child_ops.push(ChildOp::InsertBefore {
+                                node: dom_node,
+                                reference: Some(reference_node),
+                            });
+                        }
+                        None => {
+                            child_ops.push(ChildOp::AppendChild(dom_node));
                         }
                     }
-                    // If `in_lis`, the DOM node already sits at
-                    // position `target_index`; no insert_before.
                 }
-                None => {
-                    // New key (not in old) — create DOM and insert.
-                    let new_dom_node: Node = self.create_dom_node(new_child);
-                    if let Some(reference_node) = current_at_target {
-                        let _: Result<Node, JsValue> =
-                            parent.insert_before(&new_dom_node, Some(&reference_node));
-                    } else {
-                        let _: Result<Node, JsValue> = parent.append_child(&new_dom_node);
+            } else {
+                let new_dom_node: Node = self.create_dom_node(new_child);
+                match current_at_target {
+                    Some(reference_node) => {
+                        child_ops.push(ChildOp::InsertBefore {
+                            node: new_dom_node,
+                            reference: Some(reference_node),
+                        });
+                    }
+                    None => {
+                        child_ops.push(ChildOp::AppendChild(new_dom_node));
                     }
                 }
             }
         }
+        // OPT 16: flush the collected ops via a single batched JS call.
+        apply_child_ops_batch(parent, &child_ops);
     }
 
     /// Positional diffing algorithm (original behavior).
@@ -728,7 +677,7 @@ impl Renderer {
                     (old_child, new_child)
                 {
                     if old_text != new_text {
-                        dom_child.set_text_content(Some(new_text.get_content().as_ref()));
+                        dom_child.set_text_content(Some(new_text.get_content()));
                     }
                 } else {
                     let new_dom_node: Node = self.create_dom_node(new_child);
@@ -757,6 +706,15 @@ impl Renderer {
                 .collect();
             append_nodes(parent, appended);
         } else if old_len > new_len {
+            // OPT 16: collect all trailing `remove_child` ops first by
+            // walking `parent.last_child()` once per deletion, then
+            // flush them via a single batched JS call. The previous
+            // loop paid 2N crossings (`last_child` + `remove_child`).
+            // Now it pays N crossings (still need `last_child` per
+            // deletion because remove-by-position is the only sane way
+            // to walk a shrinking tail) for the resolve step plus 1
+            // crossing for the batched commit.
+            let mut remove_ops: Vec<ChildOp> = Vec::with_capacity(old_len - common_len);
             for _ in common_len..old_len {
                 // #12: the previous loop called `parent.last_child()`
                 // twice per deletion (2 → 1 JS crossing) so the same
@@ -769,9 +727,10 @@ impl Renderer {
                     Self::cleanup_subtree(element);
                 }
                 if let Some(last_child) = last_child {
-                    let _: Result<Node, JsValue> = parent.remove_child(&last_child);
+                    remove_ops.push(ChildOp::RemoveChild(last_child));
                 }
             }
+            apply_child_ops_batch(parent, &remove_ops);
         }
     }
 
@@ -915,47 +874,26 @@ impl Renderer {
                             let signal: Signal<String> = *signal;
                             let initial_value: String = signal.get();
                             element.set_attribute_or_property(attr.get_name(), &initial_value);
-                            // OPT 6 (rewrite): the bridge signal below now
-                            // carries a typed `AttributeBridge` (Element +
-                            // `&'static attr_name`) instead of going through
-                            // `BridgeRefsCell::track` on every set. The
-                            // bridge's listener fires the typed mutation
-                            // directly — no `is_connected()` JS call, no
-                            // `attr_name.to_string()` clone per set — and the
-                            // bridge struct is freed by
-                            // `Signal::<String>::clear_listeners` at DOM
-                            // teardown.
                             let bridge_signal: Signal<String> = Signal::create(initial_value);
-                            let bridge_addr: usize = bridge_signal.get_inner();
-                            element.track_signal_addr(bridge_addr);
-                            // Extract the static attribute key. The Cow's
-                            // lifetime parameter is `'static` so `Borrowed`
-                            // branches give a real `&'static str`; the
-                            // `Owned` branch only triggers when the macro
-                            // emits a non-literal key, which is rare. We
-                            // leak the owned string so the bridge can
-                            // capture a `&'static str` (matches the
-                            // existing `Box::leak` pattern for non-static
-                            // event names).
-                            let attr_name: &'static str = match attr.get_name() {
-                                Cow::Borrowed(borrowed) => borrowed,
-                                Cow::Owned(owned) => Box::leak(owned.clone().into_boxed_str()),
-                            };
-                            let bridge_element: Element = element.clone();
-                            Registry::register_attribute_bridge(
-                                bridge_addr,
-                                AttributeBridge::SetAttribute {
-                                    elem: bridge_element.clone(),
-                                    attr_name,
-                                },
-                            );
+                            element.track_signal_addr(bridge_signal.get_inner());
+                            let attr_name: String = attr.get_name().to_string();
+                            let element_clone: Element = element.clone();
                             bridge_signal.replace_listener(move || {
+                                if !Renderer::is_node_connected(&element_clone) {
+                                    return;
+                                }
                                 let new_value: String = bridge_signal.get();
-                                bridge_element.set_attribute_or_property(attr_name, &new_value);
+                                element_clone.set_attribute_or_property(&attr_name, &new_value);
                             });
                             signal.subscribe(move || {
                                 bridge_signal.set(signal.get());
                             });
+                            // The closure above captures `bridge_signal`, so
+                            // `signal` (the source) now transitively keeps the
+                            // bridge alive. Register that dependency so the
+                            // bridge's heap allocation can be reclaimed once
+                            // `signal` is deactivated.
+                            BridgeRefsCell::track(bridge_signal.get_inner(), signal.get_inner());
                         }
                         AttributeValue::Event(handler) => {
                             self.attach_event_listener(&element, handler);
@@ -981,89 +919,42 @@ impl Renderer {
                             let signal: Signal<String> = *signal;
                             let initial_value: String = signal.get();
                             element.set_inner_html(&initial_value);
-                            // OPT 6 (rewrite): the bridge signal below
-                            // carries a typed `AttributeBridge::SetInnerHtml`
-                            // (Element only, no attr_name) and fires the
-                            // typed mutation directly on every set. See the
-                            // comment on the `Signal` arm above for the
-                            // full rewrite rationale.
-                            let bridge_signal: Signal<String> = Signal::create(initial_value);
-                            let bridge_addr: usize = bridge_signal.get_inner();
-                            element.track_signal_addr(bridge_addr);
-                            let bridge_element: Element = element.clone();
-                            Registry::register_attribute_bridge(
-                                bridge_addr,
-                                AttributeBridge::SetInnerHtml {
-                                    elem: bridge_element.clone(),
-                                },
-                            );
-                            bridge_signal.replace_listener(move || {
-                                let new_value: String = bridge_signal.get();
-                                bridge_element.set_inner_html(&new_value);
-                            });
+                            element.track_signal_addr(signal.get_inner());
+                            let element_clone: Element = element.clone();
                             signal.subscribe(move || {
-                                bridge_signal.set(signal.get());
+                                if !Renderer::is_node_connected(&element_clone) {
+                                    return;
+                                }
+                                let new_value: String = signal.get();
+                                element_clone.set_inner_html(&new_value);
                             });
                         }
                         AttributeValue::Ref(node_ref) => {
-                            // NP-3: assign (or reuse) the element's
-                            // `data-euv-id` and register the NodeRef's
-                            // shared interior cell so the handle can be
-                            // cleared on unmount.
-                            let ref_euv_id: usize = match element.get_attribute(DATA_EUV_ID) {
-                                Some(id_str) => id_str.parse::<usize>().unwrap_or_else(|_| {
-                                    let new_id: usize = NEXT_EUV_ID.fetch_add(1, Ordering::Relaxed);
-                                    let _: Result<(), JsValue> =
-                                        element.set_attribute(DATA_EUV_ID, &new_id.to_string());
-                                    new_id
-                                }),
-                                None => {
-                                    let new_id: usize = NEXT_EUV_ID.fetch_add(1, Ordering::Relaxed);
-                                    let _: Result<(), JsValue> =
-                                        element.set_attribute(DATA_EUV_ID, &new_id.to_string());
-                                    new_id
-                                }
-                            };
                             let element_value: JsValue = element.clone().into();
                             node_ref.set(element_value);
-                            Registry::register_noderef(ref_euv_id, node_ref.inner.clone());
                         }
                     }
                 }
                 element.into()
             }
             VirtualNode::Text(text_node) => {
-                let text: Text = document.create_text_node(text_node.get_content().as_ref());
+                let text: Text = document.create_text_node(text_node.get_content());
                 if let Some(signal) = text_node.try_get_signal() {
                     let signal: Signal<String> = *signal;
-                    let initial_value: String = text_node.get_content().clone();
-                    text.set_text_content(Some(&initial_value));
-                    // OPT 6 (rewrite): bridge signal carries the typed
-                    // `AttributeBridge::SetTextContent` (Text reference
-                    // only) and fires `set_text_content` directly. Text
-                    // nodes cannot carry a `data-euv-signal-addrs` DOM
-                    // attribute, but the bridge signal address is
-                    // available via `Signal::deactivate`'s
-                    // `BridgeRefsCell` walk — see the comment on
-                    // `Signal::deactivate` and `try_reclaim_inactive` for
-                    // the SPA-sweep path that still frees the bridge.
-                    let bridge_signal: Signal<String> = Signal::create(initial_value);
-                    let bridge_addr: usize = bridge_signal.get_inner();
-                    let bridge_text: Text = text.clone();
-                    Registry::register_attribute_bridge(
-                        bridge_addr,
-                        AttributeBridge::SetTextContent {
-                            text: bridge_text.clone(),
-                        },
-                    );
+                    let bridge_signal: Signal<String> =
+                        Signal::create(text_node.get_content().clone());
+                    let text_clone: Text = text.clone();
                     bridge_signal.replace_listener(move || {
+                        if !Renderer::is_node_connected(&text_clone) {
+                            return;
+                        }
                         let new_value: String = bridge_signal.get();
-                        bridge_text.set_text_content(Some(&new_value));
+                        text_clone.set_text_content(Some(&new_value));
                     });
                     signal.subscribe(move || {
                         bridge_signal.set(signal.get());
                     });
-                    BridgeRefsCell::track(bridge_addr, signal.get_inner());
+                    BridgeRefsCell::track(bridge_signal.get_inner(), signal.get_inner());
                 }
                 text.into()
             }
@@ -1133,27 +1024,21 @@ impl Renderer {
         let placeholder_clone: Element = placeholder.clone();
         let mut renderer_for_sub: Self = Self::new(placeholder_clone.clone());
         renderer_for_sub.set_current_tree(Some(initial_unwrapped));
-        // OPT 16: consolidate the per-dynamic-mount state (sub-renderer +
-        // last-arm index) into a single Box<DynamicState> so each mount
-        // allocates one heap chunk instead of three. The FnMut closure
-        // captures a raw pointer to this state and reads/writes the
-        // `last_arm` field through it.
+        // Wrap heap allocations in OwnedPtr so they are freed when the closure drops.
+        let renderer_owned: OwnedPtr<Renderer> =
+            OwnedPtr::new(Box::into_raw(Box::new(renderer_for_sub)));
         let initial_arm: usize = hook_context
             .get_inner()
             .try_borrow()
             .map(|inner: Ref<HookContextInner>| inner.get_arm_changed())
             .unwrap_or_default();
-        let state: *mut DynamicState = Box::into_raw(Box::new(DynamicState {
-            renderer: renderer_for_sub,
-            last_arm: initial_arm,
-        }));
-        let state_owned: OwnedPtr<DynamicState> = OwnedPtr::new(state);
+        let last_arm_owned: OwnedPtr<usize> = OwnedPtr::new(Box::into_raw(Box::new(initial_arm)));
         let callback: Box<dyn FnMut()> = Box::new(move || {
             if placeholder_clone.parent_node().is_none() {
                 return;
             }
             hook_context.reset_index();
-            let prev_arm: usize = unsafe { (*state_owned.get()).last_arm };
+            let prev_arm: usize = unsafe { *last_arm_owned.get() };
             CURRENT_TRACKING_DYNAMIC_ID.store(dynamic_id, Ordering::Relaxed);
             let new_vnode: VirtualNode = HookContext::with(hook_context.clone(), || {
                 let inner: &mut RenderFnInner = unsafe { &mut *render_fn_rc.get() };
@@ -1166,27 +1051,27 @@ impl Renderer {
                 .unwrap_or_default();
             let arm_switched: bool = prev_arm != current_arm;
             unsafe {
-                (*state_owned.get()).last_arm = current_arm;
+                *last_arm_owned.get() = current_arm;
             }
             if skip_equal && !arm_switched {
-                let state_ref: &DynamicState = unsafe { &*state_owned.get() };
-                if let Some(old_vnode) = state_ref.renderer.try_get_current_tree() {
+                let renderer_ref: &Renderer = unsafe { &*renderer_owned.get() };
+                if let Some(old_vnode) = renderer_ref.try_get_current_tree() {
                     let new_unwrapped: VirtualNode = Self::unwrap_component_owned(new_vnode);
                     if Self::visual_eq(old_vnode, &new_unwrapped) {
                         CURRENT_TRACKING_DYNAMIC_ID.store(usize::MAX, Ordering::Relaxed);
                         return;
                     }
-                    let state_mut: &mut DynamicState = unsafe { &mut *state_owned.get() };
-                    state_mut.renderer.render(new_unwrapped);
+                    let renderer_mut: &mut Renderer = unsafe { &mut *renderer_owned.get() };
+                    renderer_mut.render(new_unwrapped);
                     CURRENT_TRACKING_DYNAMIC_ID.store(usize::MAX, Ordering::Relaxed);
                     return;
                 }
             }
-            let state_mut: &mut DynamicState = unsafe { &mut *state_owned.get() };
+            let renderer_mut: &mut Renderer = unsafe { &mut *renderer_owned.get() };
             if arm_switched {
-                state_mut.renderer.render_full_replace(new_vnode);
+                renderer_mut.render_full_replace(new_vnode);
             } else {
-                state_mut.renderer.render(new_vnode);
+                renderer_mut.render(new_vnode);
             }
             CURRENT_TRACKING_DYNAMIC_ID.store(usize::MAX, Ordering::Relaxed);
         });
@@ -1400,55 +1285,36 @@ impl Renderer {
 
     /// Recursively cleans up framework resources associated with a DOM subtree.
     ///
-    /// Removes event handlers, dynamic node listeners, signal listeners,
-    /// and `NodeRef` handles for the given element and all of its descendants.
-    ///
-    /// NP-3: clears registered `NodeRef` entries after `cleanup_element` so
-    /// `NodeRef::get()` returns `None` once the underlying DOM subtree is
-    /// gone (previously the `NodeRef` could return a stale `JsValue`).
-    ///
-    /// OPT 13: a single `query_selector_all(EUV_CLEANUP_SELECTOR)` enumerates
-    /// every element in the subtree that participates in framework cleanup
-    /// (carries `data-euv-id` or `data-euv-dynamic-id`). This replaces the
-    /// previous per-element `get_attribute` × 4 + recursive child-walk —
-    /// for a tree of M marked elements the cleanup cost drops from
-    /// `4M + M` JS-boundary crossings to a single `query_selector_all`
-    /// crossing, with the rest of the work iterating the returned
-    /// `NodeList` in pure Rust.
-    ///
-    /// Signal addresses are read from the Rust-side
-    /// [`crate::renderer::signal_addrs::SignalAddrs`] registry, never
-    /// from a DOM attribute.
+    /// Removes event handlers, dynamic node listeners, and signal listeners
+    /// for the given element and all of its descendants.
     ///
     /// # Arguments
     ///
     /// - `&Element` - The DOM element to clean up.
     fn cleanup_subtree(element: &Element) {
-        let Ok(marked) = element.query_selector_all(EUV_CLEANUP_SELECTOR) else {
-            return;
-        };
-        let length: u32 = marked.length();
-        for index in 0..length {
-            let Some(node) = marked.get(index) else {
-                continue;
-            };
-            let Some(marked_element) = node.dyn_ref::<Element>() else {
-                continue;
-            };
-            if let Some(euv_id_str) = marked_element.get_attribute(DATA_EUV_ID)
-                && let Ok(euv_id) = euv_id_str.parse::<usize>()
+        if let Some(euv_id_str) = element.get_attribute(DATA_EUV_ID)
+            && let Ok(euv_id) = euv_id_str.parse::<usize>()
+        {
+            Registry::cleanup_element(euv_id);
+        }
+        if let Some(dynamic_id_str) = element.get_attribute(DATA_EUV_DYNAMIC_ID)
+            && let Ok(dynamic_id) = dynamic_id_str.parse::<usize>()
+        {
+            Registry::cleanup_dynamic_node(dynamic_id);
+        }
+        if let Some(signal_addrs_str) = element.get_attribute(DATA_EUV_SIGNAL_ADDRS) {
+            signal_addrs_str
+                .split(CHAR_SIGNAL_ADDRS_SEPARATOR)
+                .filter_map(|addr_str: &str| addr_str.parse::<usize>().ok())
+                .for_each(Signal::<String>::clear_listeners);
+        }
+        let child_nodes: NodeList = element.child_nodes();
+        let length: u32 = child_nodes.length();
+        for child_index in 0..length {
+            if let Some(child) = child_nodes.get(child_index)
+                && let Some(child_element) = child.dyn_ref::<Element>()
             {
-                Registry::cleanup_element(euv_id);
-                if let Some(addrs) = SignalAddrs::take(euv_id) {
-                    for addr in addrs {
-                        Signal::<String>::clear_listeners(addr);
-                    }
-                }
-            }
-            if let Some(dynamic_id_str) = marked_element.get_attribute(DATA_EUV_DYNAMIC_ID)
-                && let Ok(dynamic_id) = dynamic_id_str.parse::<usize>()
-            {
-                Registry::cleanup_dynamic_node(dynamic_id);
+                Self::cleanup_subtree(child_element);
             }
         }
     }
@@ -1537,6 +1403,25 @@ impl Renderer {
                     .insert(event_name, handler_slot);
             }
         }
+    }
+
+    /// Checks whether a DOM node is currently connected to the document.
+    ///
+    /// Uses the `isConnected` JavaScript property to determine if the node
+    /// is still attached to the live DOM tree.
+    ///
+    /// # Arguments
+    ///
+    /// - `&T` - A reference to any type that can be converted to `&Node`.
+    ///
+    /// # Returns
+    ///
+    /// - `bool` - `true` if the node is connected to the document, `false` otherwise.
+    fn is_node_connected<T>(node: &T) -> bool
+    where
+        T: AsRef<Node>,
+    {
+        node.as_ref().is_connected()
     }
 }
 
