@@ -91,7 +91,6 @@ pub fn use_i18n(init_locale: &str) -> I18n {
         I18n::new(
             Signal::create(locale.to_string()),
             Signal::create(String::from("en")),
-            Signal::create(HashMap::new()),
         )
     })
 }
@@ -120,4 +119,21 @@ pub fn use_i18n(init_locale: &str) -> I18n {
 /// This function does not panic.
 pub fn i18n_register(handle: I18n, locale: &str, entries: &[(&'static str, &'static str)]) {
     handle.add_messages(locale, entries);
+}
+
+/// Clears every registered translation from the process-wide
+/// [`I18N_MESSAGES`] storage.
+///
+/// Intended for integration tests in `ui/tests/i18n/` that
+/// rely on a clean table at the start of each case. Production
+/// callers must never use this — translation tables are
+/// expected to live for the lifetime of the app.
+pub fn i18n_reset_for_tests() {
+    if let Some(lock) = I18N_MESSAGES.get() {
+        let mut guard: std::sync::RwLockWriteGuard<
+            'static,
+            HashMap<String, HashMap<String, String>>,
+        > = lock.write().unwrap_or_else(|e| e.into_inner());
+        guard.clear();
+    }
 }

@@ -276,13 +276,28 @@ where
         }
     }
 
-    /// Returns the list of dependent dynamic node IDs for this signal.
+    /// Moves the list of dependent dynamic node IDs out of this signal.
+    ///
+    /// After this call the dependents list on the signal is empty —
+    /// subsequent `add_dependent` calls will rebuild it as the next
+    /// render subscribes. This is a deliberate swap-out: callers
+    /// (currently only `set`) want to iterate the list without holding
+    /// a mutable borrow on the signal's inner state, and re-population
+    /// is safe because every dependent `with`/`get` re-adds itself.
     ///
     /// # Returns
     ///
-    /// - `Vec<usize>` - Clone of the dependents list.
-    pub(crate) fn get_dependents(&self) -> Vec<usize> {
-        Self::inner_mut(self.get_inner()).get_dependents().clone()
+    /// - `Vec<usize>` - The moved-out dependents list (empty if the
+    ///   signal had no dependents).
+    ///
+    /// OPT 17 (tail): replaces the old `get_dependents()` clone. The
+    /// previous implementation allocated a fresh `Vec<usize>` on every
+    /// signal write just to hand it to `App::schedule_update`. Now the
+    /// existing buffer is moved out (no alloc) and the inner lock is
+    /// released before iteration.
+    pub(crate) fn take_dependents(&self) -> Vec<usize> {
+        let deps: &mut Vec<usize> = Self::inner_mut(self.get_inner()).get_mut_dependents();
+        std::mem::take(deps)
     }
 
     /// Sets the value of the signal and notifies listeners.
@@ -295,12 +310,18 @@ where
     /// outermost `set()` call outside the suppressed scope will
     /// trigger the actual dispatch cycle.
     ///
+    /// OPT 17 (tail): the dependents `Vec<usize>` is moved out of the
+    /// signal under the lock via `take_dependents()` instead of being
+    /// cloned. The mutable borrow is released as soon as the take
+    /// completes, so the dispatch loop iterates a local vector with
+    /// no lock contention. Public `Signal::set` signature is unchanged.
+    ///
     /// # Arguments
     ///
     /// - `T: Clone + PartialEq + 'static` - The new value to assign to the signal.
     pub fn set(&self, value: T) {
         if self.update(value) {
-            let dependents: Vec<usize> = self.get_dependents();
+            let dependents: Vec<usize> = self.take_dependents();
             App::schedule_update(&dependents);
         }
     }
