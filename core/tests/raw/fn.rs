@@ -60,7 +60,8 @@ fn raw_html_debug_includes_type_name() {
 #[test]
 fn raw_html_into_text_node_carries_content() {
     let raw: RawHtml = RawHtml::new("<svg/>".to_string());
-    let node: VirtualNode = VirtualNode::Text(TextNode::new(raw.get_content().clone(), None));
+    let node: VirtualNode =
+        VirtualNode::Text(TextNode::new(Cow::Owned(raw.get_content().clone()), None));
     let s: String = format!("{:?}", node);
     assert!(s.contains("svg"));
 }

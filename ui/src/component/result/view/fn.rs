@@ -21,7 +21,7 @@ pub fn euv_result(node: VirtualNode<EuvResultProps>) -> VirtualNode {
         title,
         description,
     }: EuvResultProps = node.try_get_props().unwrap_or_default();
-    let children: VirtualNode = node.get_child_node();
+    let children: VirtualNode = node.get_children().into();
     html! {
         div {
             class: c_euv_result()

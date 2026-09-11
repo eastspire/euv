@@ -20,7 +20,7 @@ pub fn euv_dropdown(node: VirtualNode<EuvDropdownProps>) -> VirtualNode {
         items,
         on_select,
     }: EuvDropdownProps = node.try_get_props().unwrap_or_default();
-    let children: VirtualNode = node.get_child_node();
+    let children: VirtualNode = node.get_children().into();
     let menu_items: Vec<VirtualNode> = items
         .into_iter()
         .map(|item: EuvDropdownItem| {

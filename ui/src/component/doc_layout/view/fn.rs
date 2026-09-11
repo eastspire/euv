@@ -24,7 +24,7 @@ pub fn euv_doc_layout(node: VirtualNode<EuvDocLayoutProps>) -> VirtualNode {
         next,
         footer,
     }: EuvDocLayoutProps = node.try_get_props().unwrap_or_default();
-    let children: VirtualNode = node.get_child_node();
+    let children: VirtualNode = node.get_children().into();
     html! {
         div {
             class: c_euv_doc_layout()

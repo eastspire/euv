@@ -201,7 +201,7 @@ fn virtual_node_fragment_with_pure_rust_children() {
             key: None,
             props: None,
         },
-        VirtualNode::Text(TextNode::new(String::from("hello"), None)),
+        VirtualNode::Text(TextNode::new(Cow::Owned(String::from("hello")), None)),
     ];
     let fragment: VirtualNode = VirtualNode::Fragment(children);
     if let VirtualNode::Fragment(children) = &fragment {
@@ -224,21 +224,21 @@ fn virtual_node_fragment_clone_preserves_children() {
 
 #[test]
 fn text_node_partial_eq_visual_equality() {
-    let a: TextNode = TextNode::new(String::from("hello"), None);
-    let b: TextNode = TextNode::new(String::from("hello"), None);
+    let a: TextNode = TextNode::new(Cow::Owned(String::from("hello")), None);
+    let b: TextNode = TextNode::new(Cow::Owned(String::from("hello")), None);
     assert_eq!(a, b);
 }
 
 #[test]
 fn text_node_partial_eq_different_content() {
-    let a: TextNode = TextNode::new(String::from("hello"), None);
-    let b: TextNode = TextNode::new(String::from("world"), None);
+    let a: TextNode = TextNode::new(Cow::Owned(String::from("hello")), None);
+    let b: TextNode = TextNode::new(Cow::Owned(String::from("world")), None);
     assert_ne!(a, b);
 }
 
 #[test]
 fn text_node_debug_format_skips_signal_field() {
-    let node: TextNode = TextNode::new(String::from("hello"), None);
+    let node: TextNode = TextNode::new(Cow::Owned(String::from("hello")), None);
     let formatted: String = format!("{:?}", node);
     assert!(formatted.contains("TextNode"));
 }
@@ -291,7 +291,7 @@ fn native_virtual_node_element_construction_does_not_panic() {
 #[test]
 fn native_text_node_construction_does_not_panic() {
     let result: Result<(), String> = catch_unwind(AssertUnwindSafe(|| {
-        let _: TextNode = TextNode::new(String::from("x"), None);
+        let _: TextNode = TextNode::new(Cow::Owned(String::from("x")), None);
     }))
     .map_err(|_| "panic".to_string());
     assert!(result.is_ok());

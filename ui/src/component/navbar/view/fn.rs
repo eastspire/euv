@@ -23,7 +23,7 @@ pub fn euv_navbar(node: VirtualNode<EuvNavbarProps>) -> VirtualNode {
         items,
         drawer_open,
     }: EuvNavbarProps = node.try_get_props().unwrap_or_default();
-    let children: VirtualNode = node.get_child_node();
+    let children: VirtualNode = node.get_children().into();
     let menu_button: VirtualNode = match drawer_open {
         Some(signal) => html! {
             button {

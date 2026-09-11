@@ -51,7 +51,7 @@ impl Parse for HtmlNode {
         }
         if input.peek(LitStr) {
             let literal_string: LitStr = input.parse()?;
-            return Ok(HtmlNode::Text(literal_string.value()));
+            return Ok(HtmlNode::Text(literal_string));
         }
         if input.peek(Token![if]) {
             let html_if: HtmlIf = input.parse()?;
@@ -375,7 +375,7 @@ impl Parse for HtmlElement {
                 attributes.push((key_literal.to_token_stream(), value));
             } else if content.peek(LitStr) {
                 let literal_string: LitStr = content.parse()?;
-                children.push(HtmlNode::Text(literal_string.value()));
+                children.push(HtmlNode::Text(literal_string));
             } else if content.peek(Ident) {
                 if content.peek2(Brace) {
                     let element: HtmlElement = content.parse()?;
@@ -424,8 +424,20 @@ impl ToTokens for HtmlNode {
         match self {
             HtmlNode::Element(element) => element.to_tokens(tokens),
             HtmlNode::Text(text) => {
+                // OPT 29: emit `Cow::Borrowed(<original literal>)` so
+                // the runtime `TextNode::new` receives a borrowed
+                // `&'static str` slice instead of an owned `String`.
+                // The original `LitStr` token is re-emitted verbatim;
+                // proc-macro2 / rustc embed the literal once in the
+                // binary's read-only data section and every render
+                // references the same slice. No per-render allocation
+                // for literal text content (markdown pages, static
+                // labels, etc. — common case).
                 tokens.extend(quote! {
-                    ::euv::VirtualNode::Text(::euv::TextNode::new(#text.into(), None))
+                    ::euv::VirtualNode::Text(::euv::TextNode::new(
+                        ::std::borrow::Cow::Borrowed(#text),
+                        None,
+                    ))
                 });
             }
             HtmlNode::Expr(expr) => {

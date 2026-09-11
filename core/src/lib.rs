@@ -13,6 +13,7 @@ mod vdom;
 pub use {app::*, event::*, noderef::*, reactive::*, vdom::*};
 
 pub use std::{
+    borrow::Cow,
     collections::hash_map::DefaultHasher,
     collections::{HashMap, HashSet, VecDeque},
     fmt::{self, Debug, Display, Formatter, Result as FmtResult},
@@ -26,7 +27,6 @@ pub(crate) use renderer::*;
 
 use std::{
     any::Any,
-    borrow::Cow,
     cell::{Ref, RefCell, UnsafeCell},
     iter::Iterator,
     num::ParseIntError,

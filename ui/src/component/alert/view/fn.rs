@@ -16,7 +16,7 @@ use super::*;
 #[component]
 pub fn euv_alert(node: VirtualNode<EuvAlertProps>) -> VirtualNode {
     let EuvAlertProps { variant }: EuvAlertProps = node.try_get_props().unwrap_or_default();
-    let children: VirtualNode = node.get_child_node();
+    let children: VirtualNode = node.get_children().into();
     match variant {
         AlertVariant::Error => html! {
             div {

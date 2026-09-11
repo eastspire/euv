@@ -159,7 +159,7 @@ impl Renderer {
         match (old_node, new_node) {
             (VirtualNode::Text(old_text), VirtualNode::Text(new_text)) => {
                 if old_text != new_text {
-                    dom_element.set_text_content(Some(new_text.get_content()));
+                    dom_element.set_text_content(Some(new_text.get_content().as_ref()));
                 }
             }
             (
@@ -655,7 +655,7 @@ impl Renderer {
                     (old_child, new_child)
                 {
                     if old_text != new_text {
-                        dom_child.set_text_content(Some(new_text.get_content()));
+                        dom_child.set_text_content(Some(new_text.get_content().as_ref()));
                     }
                 } else {
                     let new_dom_node: Node = self.create_dom_node(new_child);
@@ -925,11 +925,11 @@ impl Renderer {
                 element.into()
             }
             VirtualNode::Text(text_node) => {
-                let text: Text = document.create_text_node(text_node.get_content());
+                let text: Text = document.create_text_node(text_node.get_content().as_ref());
                 if let Some(signal) = text_node.try_get_signal() {
                     let signal: Signal<String> = *signal;
                     let bridge_signal: Signal<String> =
-                        Signal::create(text_node.get_content().clone());
+                        Signal::create(text_node.get_content().as_ref().to_owned());
                     let text_clone: Text = text.clone();
                     bridge_signal.replace_listener(move || {
                         if !Renderer::is_node_connected(&text_clone) {

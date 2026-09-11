@@ -4,6 +4,9 @@ use super::*;
 ///
 /// Only compares the text content; the backing signal is not considered
 /// because it does not affect visual output.
+///
+/// OPT 29: `content` is `Cow<'static, str>`; compare the dereffed
+/// string views (cheap for both `Borrowed` and `Owned`).
 impl PartialEq for TextNode {
     /// Returns `true` when `self` and `other` are equivalent by the [`PartialEq`] contract.
     ///
@@ -15,7 +18,7 @@ impl PartialEq for TextNode {
     ///
     /// - `bool` - `true` when `self` and `other` are equivalent by the trait contract.
     fn eq(&self, other: &Self) -> bool {
-        self.get_content() == other.get_content()
+        self.get_content().as_ref() == other.get_content().as_ref()
     }
 }
 
@@ -219,19 +222,36 @@ impl<T> VirtualNode<T> {
         }
     }
 
-    /// Returns a reference to the children of this node, if it has any.
+    /// Returns the children of this node as a borrowed slice.
     ///
-    /// Returns `Some` for `Element` and `Fragment` variants, `None` otherwise.
+    /// Returns an empty slice for `Empty`, the children of `Element`
+    /// and `Fragment` variants, and an empty slice for `Text` /
+    /// `Dynamic`. Zero-copy; callers can iterate without cloning.
     ///
     /// # Returns
     ///
-    /// - `Option<&Vec<VirtualNode>>` - The children, or `None`.
-    pub fn try_get_children(&self) -> Option<&Vec<VirtualNode>> {
+    /// - `&[VirtualNode]` - The children, or an empty slice.
+    pub fn get_children(&self) -> &[VirtualNode] {
         match self {
-            Self::Element { children, .. } => Some(children),
-            Self::Fragment(children) => Some(children),
-            _ => None,
+            Self::Element { children, .. } => children.as_slice(),
+            Self::Fragment(children) => children.as_slice(),
+            _ => &[],
         }
+    }
+
+    /// Returns the first child of this node as a borrowed reference,
+    /// if any.
+    ///
+    /// Returns `None` when there are no children; otherwise returns
+    /// a reference to the first child. Zero-copy; replaces the
+    /// previous `get_child_node` helper that cloned the entire
+    /// children subtree per render.
+    ///
+    /// # Returns
+    ///
+    /// - `Option<&VirtualNode>` - The first child, or `None`.
+    pub fn get_first_child(&self) -> Option<&VirtualNode> {
+        self.get_children().first()
     }
 
     /// Returns `true` if this node has non-empty children.
@@ -240,8 +260,7 @@ impl<T> VirtualNode<T> {
     ///
     /// - `bool` - Whether this node has children.
     pub fn has_children(&self) -> bool {
-        self.try_get_children()
-            .is_some_and(|children: &Vec<VirtualNode>| !children.is_empty())
+        !self.get_children().is_empty()
     }
 
     /// Clones the props of this node.
@@ -259,23 +278,21 @@ impl<T> VirtualNode<T> {
         }
     }
 
-    /// Returns the children of this node as a virtual node.
+    /// Returns the children of this node as a borrowed slice.
     ///
-    /// Returns `VirtualNode::Empty` when there are no children, a single child
-    /// when there is exactly one, or `VirtualNode::Fragment` when there are
-    /// multiple children.
+    /// Equivalent to [`Self::get_children`] but exposes the raw
+    /// `Option<&[VirtualNode]>` shape for callers that want to
+    /// distinguish "no children" from "empty children" (Element
+    /// without children vs. Text/Dynamic/Empty).
     ///
     /// # Returns
     ///
-    /// - `Option<VirtualNode>` - The children as a virtual node.
-    pub fn try_get_child_node(&self) -> Option<VirtualNode> {
-        match self.try_get_children() {
-            Some(children) => match children.len() {
-                0 => None,
-                1 => children.first().cloned(),
-                _ => Some(VirtualNode::Fragment(children.clone())),
-            },
-            None => None,
+    /// - `Option<&[VirtualNode]>` - The children, or `None`.
+    pub fn try_get_children(&self) -> Option<&[VirtualNode]> {
+        match self {
+            Self::Element { children, .. } => Some(children.as_slice()),
+            Self::Fragment(children) => Some(children.as_slice()),
+            _ => None,
         }
     }
 
@@ -318,19 +335,6 @@ impl<T> VirtualNode<T> {
             }
             other => other,
         }
-    }
-
-    /// Returns the children of this node as a virtual node.
-    ///
-    /// Returns `VirtualNode::Empty` when there are no children, a single child
-    /// when there is exactly one, or `VirtualNode::Fragment` when there are
-    /// multiple children.
-    ///
-    /// # Returns
-    ///
-    /// - `VirtualNode` - The children as a virtual node.
-    pub fn get_child_node(&self) -> VirtualNode {
-        self.try_get_child_node().unwrap_or_default()
     }
 
     /// Returns the diffing key of this node, if it has one.

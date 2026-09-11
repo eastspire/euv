@@ -1,14 +1,49 @@
 use super::*;
+use std::fmt::{self, Debug, Formatter};
+
+fn fmt_lit_str(lit: &syn::LitStr, formatter: &mut Formatter<'_>) -> fmt::Result {
+    write!(formatter, "Text({:?})", lit.value())
+}
+
+/// Debug formatting for `HtmlNode`.
+///
+/// Hand-rolled because `HtmlNode::Text` carries a `proc_macro2::LitStr`
+/// token (not a plain `String`) and we don't want to drag a full
+/// `TokenStream` formatter into the derive output. Other variants
+/// delegate to their `Debug` impls.
+impl Debug for HtmlNode {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Element(element) => formatter.debug_tuple("Element").field(element).finish(),
+            Self::Text(lit) => fmt_lit_str(lit, formatter),
+            Self::Expr(expr) => formatter.debug_tuple("Expr").field(expr).finish(),
+            Self::Dynamic(expr) => formatter.debug_tuple("Dynamic").field(expr).finish(),
+            Self::If(html_if) => formatter.debug_tuple("If").field(html_if).finish(),
+            Self::Match(html_match) => formatter.debug_tuple("Match").field(html_match).finish(),
+            Self::For(html_for) => formatter.debug_tuple("For").field(html_for).finish(),
+            Self::DynamicTag(dynamic_tag) => formatter
+                .debug_tuple("DynamicTag")
+                .field(dynamic_tag)
+                .finish(),
+        }
+    }
+}
 
 /// Represents a single HTML node, which may be an element or text.
 ///
 /// Parsed from the `html!` macro input before code generation.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(crate) enum HtmlNode {
     /// An HTML element.
     Element(HtmlElement),
     /// A text string literal.
-    Text(String),
+    ///
+    /// OPT 29: stores the original `LitStr` token (not the parsed
+    /// `String`) so the codegen can re-emit the literal source as a
+    /// `Cow::Borrowed(&'static str)` constant — the binary embeds the
+    /// string once and every render reuses the same slice instead of
+    /// allocating a fresh `String` per text node.
+    Text(syn::LitStr),
     /// A bare Rust expression (identifiers without braces), converted to a
     /// `VirtualNode` via `IntoNode::into_node`. This is a static one-shot
     /// conversion — no re-rendering on signal changes.
