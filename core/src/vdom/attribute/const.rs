@@ -59,9 +59,6 @@ pub(crate) const CSS_RULE_CLOSE_FORMAT: &str = " }";
 /// when appended to the shared `<style>` element.
 pub(crate) const CHAR_CSS_RULE_SEPARATOR: char = '\n';
 
-/// The signal addresses separator character.
-pub(crate) const CHAR_SIGNAL_ADDRS_SEPARATOR: char = ',';
-
 /// The backslash character used for escaping special characters in CSS selectors.
 pub(crate) const CHAR_CSS_ESCAPE: char = '\\';
 
