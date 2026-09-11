@@ -202,6 +202,13 @@ pub fn euv_vconsole_drawer(node: VirtualNode<EuvVconsoleDrawerProps>) -> Virtual
 /// visibility with CSS `height` + `overflow` so that the `if` arm-switch never triggers
 /// `render_full_replace` when the first log entry arrives.
 ///
+/// OPT-23: the previous implementation called `Console::filter_entries` three
+/// times per render (once for the empty-state class branch, once for the
+/// log-list class branch, and once for the `for` body) — each call cloned
+/// the entire log Vec. With 200 entries that was 600 entry clones per
+/// render. We now subscribe to `logs` + `filter` via `computed!` and the
+/// resulting cached signal is read once per render.
+///
 /// # Arguments
 ///
 /// - `Signal<Vec<ConsoleEntry>>` - A `Signal<Vec<ConsoleEntry>>` parameter.
@@ -214,9 +221,21 @@ fn build_vconsole_log_nodes(
     logs: Signal<Vec<ConsoleEntry>>,
     filter: Signal<LogFilter>,
 ) -> VirtualNode {
+    let cached_filter: Signal<Vec<(usize, ConsoleEntry)>> =
+        computed!(logs, filter, |log_snapshot: Vec<ConsoleEntry>,
+                                 current_filter: LogFilter|
+         -> Vec<(usize, ConsoleEntry)> {
+            let _ = log_snapshot;
+            let _ = current_filter;
+            Console::filter_entries(logs, filter)
+        });
+    let snapshot: Vec<(usize, ConsoleEntry)> = cached_filter.get();
+    let snapshot_ref: &[(usize, ConsoleEntry)] = snapshot.as_slice();
+    let snapshot_len: usize = snapshot_ref.len();
+    let entries_iter = snapshot_ref.iter();
     html! {
         div {
-            class: if { Console::filter_entries(logs, filter).is_empty() } {
+            class: if { snapshot_len == 0 } {
                 c_vconsole_empty()
             } else {
                 c_vconsole_empty_hidden()
@@ -224,12 +243,12 @@ fn build_vconsole_log_nodes(
             "No logs yet."
         }
         div {
-            class: if { Console::filter_entries(logs, filter).is_empty() } {
+            class: if { snapshot_len == 0 } {
                 c_vconsole_log_list_hidden()
             } else {
                 c_vconsole_log_list()
             }
-            for (index, entry) in { &Console::filter_entries(logs, filter) } {
+            for (index, entry) in entries_iter {
                 div {
                     key: index.to_string()
                     class: c_vconsole_log_item()

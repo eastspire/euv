@@ -99,58 +99,71 @@ impl AttributeValue {
             .any(|value: &Self| matches!(value, Self::Signal(_)));
         if has_signal {
             let owned_values: Vec<Self> = values.to_vec();
-            let compute: Box<dyn Fn() -> String> = Box::new(move || {
-                owned_values
-                    .iter()
-                    .filter_map(|value: &Self| match value {
-                        Self::Css(css) => {
-                            css.inject_style();
-                            Some(css.get_name().to_string())
-                        }
-                        // OPT-11: `CssRef` shares the same `Css` body as the
-                        // owned `Css` variant, so the static-borrow name is
-                        // identical and the style still needs to be injected
-                        // once on first reference. Without this arm the ref
-                        // would fall through to `_ => None` and silently drop
-                        // out of the merged class list — the regression that
-                        // wiped every multi-class CssRef entry (e.g. the
-                        // `c_binding_slider` class next to a parameterized
-                        // `c_slider_value("30%")` on the same `<input>`).
-                        Self::CssRef(css) => {
-                            css.inject_style();
-                            Some(css.get_name().to_string())
-                        }
-                        Self::Text(text_value) => Some(text_value.clone()),
-                        Self::Signal(signal) => Some(signal.get()),
-                        _ => None,
-                    })
-                    .filter(|segment: &String| !segment.is_empty())
-                    .collect::<Vec<String>>()
-                    .join(CHAR_SPACE)
-            });
+            let compute: Box<dyn Fn() -> String> =
+                Box::new(move || Self::join_class_segments(&owned_values));
             let attr_signal: Signal<String> = Signal::create(compute());
             Self::subscribe_attr(attr_signal, compute);
             return Self::Signal(attr_signal);
         }
-        let result: String = values
-            .iter()
-            .filter_map(|value: &Self| match value {
+        Self::Text(Self::join_class_segments(values))
+    }
+
+    /// Joins class attribute values into a single space-separated string.
+    ///
+    /// OPT-20: builds the result in a single `String::with_capacity`
+    /// allocation, avoiding the intermediate `Vec<String>` plus `join(" ")`
+    /// round-trip of the previous implementation. Iterates the input
+    /// values by reference and clones only the segments that survive
+    /// the filter (skipping `_ => None` arms and empty `Text` strings),
+    /// so the per-class render allocation drops from `N + 2` to `1`.
+    ///
+    /// OPT-11: both `Css` and `CssRef` arms inject the style on first
+    /// reference. Without the `CssRef` arm the ref would fall through
+    /// to `_ => None` and silently drop out of the merged class list —
+    /// the regression that wiped every multi-class CssRef entry (e.g.
+    /// the `c_binding_slider` class next to a parameterized
+    /// `c_slider_value("30%")` on the same `<input>`).
+    fn join_class_segments(values: &[Self]) -> String {
+        let mut joined: String = String::new();
+        for value in values.iter() {
+            let segment: std::borrow::Cow<'_, str> = match value {
                 Self::Css(css) => {
                     css.inject_style();
-                    Some(css.get_name().to_string())
+                    let name: &str = css.get_name();
+                    if name.is_empty() {
+                        continue;
+                    }
+                    std::borrow::Cow::Borrowed(name)
                 }
-                // OPT-11: see the matching arm in the signal branch above.
                 Self::CssRef(css) => {
                     css.inject_style();
-                    Some(css.get_name().to_string())
+                    let name: &str = css.get_name();
+                    if name.is_empty() {
+                        continue;
+                    }
+                    std::borrow::Cow::Borrowed(name)
                 }
-                Self::Text(text_value) => Some(text_value.clone()),
-                _ => None,
-            })
-            .filter(|segment: &String| !segment.is_empty())
-            .collect::<Vec<String>>()
-            .join(CHAR_SPACE);
-        Self::Text(result)
+                Self::Text(text_value) => {
+                    if text_value.is_empty() {
+                        continue;
+                    }
+                    std::borrow::Cow::Borrowed(text_value.as_str())
+                }
+                Self::Signal(signal) => {
+                    let current: String = signal.get();
+                    if current.is_empty() {
+                        continue;
+                    }
+                    std::borrow::Cow::Owned(current)
+                }
+                _ => continue,
+            };
+            if !joined.is_empty() {
+                joined.push(' ');
+            }
+            joined.push_str(segment.as_ref());
+        }
+        joined
     }
 
     /// Merges multiple style attribute values into a single `Self`.
@@ -173,32 +186,47 @@ impl AttributeValue {
             .any(|value: &Self| matches!(value, Self::Signal(_)));
         if has_signal {
             let owned_values: Vec<Self> = values.to_vec();
-            let compute: Box<dyn Fn() -> String> = Box::new(move || {
-                owned_values
-                    .iter()
-                    .filter_map(|value: &Self| match value {
-                        Self::Text(text_value) => Some(text_value.clone()),
-                        Self::Signal(signal) => Some(signal.get()),
-                        _ => None,
-                    })
-                    .filter(|segment: &String| !segment.is_empty())
-                    .collect::<Vec<String>>()
-                    .join(CHAR_SPACE)
-            });
+            let compute: Box<dyn Fn() -> String> =
+                Box::new(move || Self::join_style_segments(&owned_values));
             let attr_signal: Signal<String> = Signal::create(compute());
             Self::subscribe_attr(attr_signal, compute);
             return Self::Signal(attr_signal);
         }
-        let result: String = values
-            .iter()
-            .filter_map(|value: &Self| match value {
-                Self::Text(text_value) => Some(text_value.clone()),
-                _ => None,
-            })
-            .filter(|segment: &String| !segment.is_empty())
-            .collect::<Vec<String>>()
-            .join(CHAR_SPACE);
-        Self::Text(result)
+        Self::Text(Self::join_style_segments(values))
+    }
+
+    /// Joins style attribute values into a single space-separated string.
+    ///
+    /// OPT-20: same single-allocation approach as `join_class_segments`,
+    /// specialised to the `Text` + `Signal` cases that style merging uses.
+    /// Avoids the intermediate `Vec<String>` plus `join(" ")` round-trip of
+    /// the previous implementation, dropping per-render allocation count
+    /// from `N + 2` to `1`.
+    fn join_style_segments(values: &[Self]) -> String {
+        let mut joined: String = String::new();
+        for value in values.iter() {
+            let segment: std::borrow::Cow<'_, str> = match value {
+                Self::Text(text_value) => {
+                    if text_value.is_empty() {
+                        continue;
+                    }
+                    std::borrow::Cow::Borrowed(text_value.as_str())
+                }
+                Self::Signal(signal) => {
+                    let current: String = signal.get();
+                    if current.is_empty() {
+                        continue;
+                    }
+                    std::borrow::Cow::Owned(current)
+                }
+                _ => continue,
+            };
+            if !joined.is_empty() {
+                joined.push(' ');
+            }
+            joined.push_str(segment.as_ref());
+        }
+        joined
     }
 
     /// Subscribes an attribute signal to the global signal update dispatch cycle.
