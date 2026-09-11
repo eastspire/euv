@@ -109,16 +109,20 @@ impl UseEuvInput {
     const FOCUS_SCROLL_DELAY_MILLIS: i32 = 220;
 
     /// Creates a focus handler that scrolls the focused input into the
-    /// visible area between the safe top and the soft keyboard.
+    /// visible area above the soft keyboard.
     ///
-    /// Reads `--euv-keyboard-height` (set by the native host /
-    /// `IMMERSIVE_SAFE_AREA_SCRIPT` page bridge) and the visual viewport.
-    /// If the input's bottom edge falls under
-    /// `viewport_bottom - keyboard_height - FOCUS_GAP_PX`, the page is
-    /// scrolled by the difference. A small inline `padding-bottom` is also
-    /// added to `<main>` (when one exists) so the document gains enough
-    /// scrollable space for the adjustment — the inline style is cleared
-    /// by [`Self::on_blur_restore_height`].
+    /// The keyboard is accounted for entirely through the visual viewport:
+    /// hosts that overlay the IME shrink `visualViewport.height` (mobile
+    /// browsers with `interactive-widget=resizes-visual`), while immersive
+    /// hosts such as euv-app shrink the layout viewport itself through the
+    /// native inset bridge (WebView bottomMargin). Both paths place the
+    /// visible bottom edge at `visualViewport.height + offsetTop`, so this
+    /// handler never subtracts a keyboard height — doing so double-counts
+    /// the IME whenever the host has already resized the view.
+    ///
+    /// When the document is too short to scroll the input far enough, the
+    /// remaining deficit is added to `<main>` as an inline
+    /// `padding-bottom` (cleared on blur by [`Self::on_blur_restore_height`]).
     pub fn on_focus_scroll_into_view() -> Option<Rc<dyn Fn(Event)>> {
         Some(Rc::new(move |event: Event| {
             let Some(target) = event.target() else {
@@ -132,47 +136,38 @@ impl UseEuvInput {
             };
             let element_clone: HtmlElement = element.clone();
             let window_clone: Window = window.clone();
-            if let Ok(Some(main_el)) = element.closest("main")
-                && let Ok(main) = main_el.dyn_into::<HtmlElement>()
-            {
-                let _: Result<(), JsValue> = main
-                    .style()
-                    .set_property("padding-bottom", "var(--euv-keyboard-height, 0px)");
-            }
             let closure: Closure<dyn FnMut()> = Closure::wrap(Box::new(move || {
-                let rect: DomRect = element_clone.get_bounding_client_rect();
-                let input_bottom: f64 = rect.bottom();
-                let viewport_height: f64 = window_clone
-                    .visual_viewport()
-                    .map(|viewport: VisualViewport| viewport.height())
-                    .unwrap_or_else(|| {
-                        window_clone
-                            .inner_height()
-                            .map(|height: JsValue| height.as_f64().unwrap_or_default())
-                            .unwrap_or_default()
-                    });
-                let document_value: Document = match window_clone.document() {
-                    Some(doc) => doc,
-                    None => return,
-                };
-                let probe: Element = match document_value.create_element("div") {
-                    Ok(el) => el,
-                    Err(_) => return,
-                };
-                let keyboard_height: f64 = window_clone
-                    .get_computed_style(&probe)
-                    .ok()
-                    .flatten()
-                    .and_then(|style| style.get_property_value("--euv-keyboard-height").ok())
-                    .and_then(|raw| {
-                        let trimmed = raw.trim().trim_end_matches("px").to_string();
-                        trimmed.parse::<f64>().ok()
-                    })
-                    .unwrap_or(0.0);
-                let visible_bottom: f64 = viewport_height - keyboard_height - Self::FOCUS_GAP_PX;
-                if input_bottom > visible_bottom && visible_bottom > 0.0 {
-                    let scroll_amount: f64 = input_bottom - visible_bottom;
-                    window_clone.scroll_by_with_x_and_y(0.0, scroll_amount);
+                let visible_bottom: f64 = match window_clone.visual_viewport() {
+                    Some(viewport) => viewport.height() + viewport.offset_top(),
+                    None => window_clone
+                        .inner_height()
+                        .map(|height: JsValue| height.as_f64().unwrap_or_default())
+                        .unwrap_or_default(),
+                } - Self::FOCUS_GAP_PX;
+                if visible_bottom <= 0.0 {
+                    return;
+                }
+                let input_bottom: f64 = element_clone.get_bounding_client_rect().bottom();
+                if input_bottom <= visible_bottom {
+                    return;
+                }
+                let deficit: f64 = input_bottom - visible_bottom;
+                window_clone.scroll_by_with_x_and_y(0.0, deficit);
+                // Bottom-anchored input in a short document: the scroll above
+                // clamps at the document end, so pad <main> by exactly the
+                // remaining deficit and scroll once more. The padding equals
+                // the missing scroll room — never the full keyboard height.
+                let remaining: f64 =
+                    element_clone.get_bounding_client_rect().bottom() - visible_bottom;
+                if remaining > 0.0 {
+                    if let Ok(Some(main_el)) = element_clone.closest("main")
+                        && let Ok(main) = main_el.dyn_into::<HtmlElement>()
+                    {
+                        let _: Result<(), JsValue> = main
+                            .style()
+                            .set_property("padding-bottom", &format!("{remaining}px"));
+                    }
+                    window_clone.scroll_by_with_x_and_y(0.0, remaining);
                 }
             }));
             let _: Result<i32, JsValue> = window
