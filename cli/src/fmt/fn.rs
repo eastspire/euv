@@ -93,17 +93,8 @@ where
                             macro_indent + 4
                         };
                         let indent_str: String = " ".repeat(base_indent);
-                        let indented_body: String = trimmed_body
-                            .lines()
-                            .map(|line: &str| {
-                                if line.trim().is_empty() {
-                                    line.to_string()
-                                } else {
-                                    format!("{indent_str}{line}")
-                                }
-                            })
-                            .collect::<Vec<String>>()
-                            .join("\n");
+                        let indented_body: String =
+                            indented_body_skipping_block_comments(trimmed_body, &indent_str);
                         let outer_indent_str: String = " ".repeat(macro_indent);
                         result.push(CHAR_BRACE_LEFT);
                         result.push(CHAR_NEWLINE);
@@ -932,6 +923,94 @@ fn add_indentation(body: &str) -> String {
         index += 1;
     }
     result
+}
+
+/// Indents each line of a macro body with `indent_str`, except for lines
+/// that are continuations of a `/* ... */` block comment.
+///
+/// Block comments are extracted verbatim by `extract_block_comment` and may
+/// contain lines with their own internal whitespace alignment. The previous
+/// implementation always prepended `indent_str`, which caused a
+/// non-idempotent compounding bug: every run of `euv fmt` added one more
+/// level of indentation to comment continuation lines
+/// (135 spaces → 139 → 143 → ...). Tracking `/* ... */` regions here and
+/// skipping the prepend for their continuation lines makes the formatter
+/// idempotent on macro bodies containing block comments with internal
+/// whitespace.
+fn indented_body_skipping_block_comments(body: &str, indent_str: &str) -> String {
+    let chars: Vec<char> = body.chars().collect();
+    let len: usize = chars.len();
+    let mut in_block_comment: bool = false;
+    let mut line_starts_in_comment: bool = false;
+    let mut result_lines: Vec<String> = Vec::new();
+    let mut current_line: String = String::new();
+    let mut index: usize = 0;
+    while index < len {
+        if !in_block_comment
+            && index + 1 < len
+            && chars[index] == CHAR_SLASH_FORWARD
+            && chars[index + 1] == CHAR_ASTERISK
+        {
+            in_block_comment = true;
+            line_starts_in_comment = current_line.is_empty()
+                || current_line
+                    .chars()
+                    .all(|c: char| c == CHAR_SPACE || c == CHAR_TAB);
+            current_line.push(chars[index]);
+            current_line.push(chars[index + 1]);
+            index += 2;
+            continue;
+        }
+        if in_block_comment {
+            current_line.push(chars[index]);
+            if chars[index] == CHAR_ASTERISK
+                && index + 1 < len
+                && chars[index + 1] == CHAR_SLASH_FORWARD
+            {
+                current_line.push(chars[index + 1]);
+                index += 2;
+                in_block_comment = false;
+                continue;
+            }
+            index += 1;
+            continue;
+        }
+        if chars[index] == CHAR_NEWLINE {
+            current_line.push(CHAR_NEWLINE);
+            let line_owned: String = std::mem::take(&mut current_line);
+            let line_ref: &str = line_owned.as_str();
+            let indented: String = if line_starts_in_comment || line_ref.trim().is_empty() {
+                line_owned
+            } else {
+                let mut s: String = String::with_capacity(indent_str.len() + line_owned.len());
+                s.push_str(indent_str);
+                s.push_str(line_owned.as_str());
+                s
+            };
+            result_lines.push(indented);
+            // Only reset for lines that are NOT continuations of an open
+            // `/* ... */` region. If the newline fell inside an open block
+            // comment, the next line is also part of the comment and must
+            // not get `indent_str` prepended (that is exactly the
+            // compounding bug we are fixing).
+            line_starts_in_comment = in_block_comment;
+            index += 1;
+            continue;
+        }
+        current_line.push(chars[index]);
+        index += 1;
+    }
+    let line_owned: String = current_line;
+    let indented: String = if line_starts_in_comment || line_owned.trim().is_empty() {
+        line_owned
+    } else {
+        let mut s: String = String::with_capacity(indent_str.len() + line_owned.len());
+        s.push_str(indent_str);
+        s.push_str(line_owned.as_str());
+        s
+    };
+    result_lines.push(indented);
+    result_lines.join("")
 }
 
 /// Checks if the current position is the start of the `if` keyword.

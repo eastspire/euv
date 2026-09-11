@@ -272,3 +272,60 @@ fn test_sibling_elements_compressed() {
     let expected: &str = "html! {\n    euv_vconsole_fab {\n        panel_open: panel_open\n        console_signal: console_signal\n    }\n    euv_vconsole_drawer {\n        console_signal: console_signal\n        panel_open: panel_open\n    }\n}";
     assert_eq!(format_euv_macros(input), expected);
 }
+
+/// Regression: block comments inside macro bodies with internal whitespace
+/// must not drift on repeated fmt runs. Previously each run added 4 spaces of
+/// indentation to comment continuation lines, so running `euv fmt` repeatedly
+/// produced different output each time (compounding indent).
+#[test]
+fn test_block_comment_idempotent_in_class_macro() {
+    let inner_indent: &str = "    ";
+    let body: String = format!(
+        "class! {{\n{inner_indent}pub c_test {{\n{inner_indent}{inner_indent}/* `width: 100%` instead of `min-width: 140px` so the menu\n{ws}matches the dropdown container (and therefore the\n{ws}trigger button) width exactly. With only `min-width`,\n{ws}a trigger wider than 140px (e.g. the 206px-wide\n{ws}nav-column locale switcher button) leaves a large\n{ws}empty gap on the left of the menu, since `right: 0`\n{ws}anchors only the right edge to the container. With\n{ws}`width: 100%`, the menu's left edge lines up with the\n{ws}trigger's left edge. The default minimum content width\n{ws}is still guaranteed by the inner items' own padding,\n{ws}so we keep the rule without an explicit min. */\n{inner_indent}{inner_indent}color: \"red\";\n{inner_indent}}}\n}}",
+        ws = " ".repeat(135),
+    );
+    let once: String = format_euv_macros(&body);
+    let twice: String = format_euv_macros(&once);
+    assert_eq!(
+        once, twice,
+        "format_euv_macros must be idempotent on block comments with internal whitespace"
+    );
+}
+
+/// Regression: format_macro_body on a class! body containing a block comment
+/// with deep internal indent must also be idempotent at the body level.
+#[test]
+fn test_block_comment_idempotent_in_macro_body() {
+    let input: &str = "class! {c_test {/* line one\n                                                                                                                                                           line two\n                                                                                                                                                           line three */\n        color: \"red\";}}";
+    let once: String = format_macro_body(input);
+    let twice: String = format_macro_body(&once);
+    assert_eq!(
+        once, twice,
+        "format_macro_body must be idempotent on block comments with internal whitespace"
+    );
+}
+
+/// Regression: repeated fmt runs on a macro body containing a block comment
+/// with deep internal indent must not compound indent on continuation lines.
+/// (The fix preserves the comment's original internal whitespace but
+/// prevents `indented_body` from re-prepending indentation to lines that
+/// are continuations of `/* ... */` regions.)
+#[test]
+fn test_block_comment_continuation_lines_normalized() {
+    let inner_indent: &str = "    ";
+    let body: String = format!(
+        "class! {{\n{inner_indent}c_test {{\n{inner_indent}{inner_indent}/* short\n{ws}continuation\n{ws}lines */\n{inner_indent}{inner_indent}color: \"red\";\n{inner_indent}}}\n}}",
+        ws = " ".repeat(135),
+    );
+    let once: String = format_euv_macros(&body);
+    let twice: String = format_euv_macros(&once);
+    let thrice: String = format_euv_macros(&twice);
+    assert_eq!(
+        once, twice,
+        "format_euv_macros must be idempotent (run 1 vs 2)"
+    );
+    assert_eq!(
+        twice, thrice,
+        "format_euv_macros must be idempotent (run 2 vs 3)"
+    );
+}
