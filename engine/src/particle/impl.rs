@@ -180,7 +180,15 @@ impl ParticleEmitter {
     /// Records all live particles into the given draw list as filled circles.
     ///
     /// Each particle's color and radius are interpolated between the
-    /// configured start and end values by its normalized age.
+    /// configured start and end values by its normalized age, and the
+    /// color is then snapped to the nearest entry in `PARTICLE_PALETTE`
+    /// via `quantize`. Quantizing is visually nearly identical for
+    /// gradient particles (32-bucket quantization of a smooth gradient is
+    /// imperceptible at canvas resolution) and dramatically increases
+    /// the number of particles that share the same `DrawCommand::FillCircle::color`
+    /// field, so the DrawList replay loop coalesces `set_fill_style_str`
+    /// calls across the entire batch instead of switching style for every
+    /// particle.
     ///
     /// # Arguments
     ///
@@ -198,7 +206,9 @@ impl ParticleEmitter {
             if radius <= 0.0 || color.get_alpha() <= 0.0 {
                 continue;
             }
-            draw_list.fill_circle(particle.get_position(), radius, color);
+            let bucket: u8 = Self::quantize(&color);
+            let quantized_color: Color = PARTICLE_PALETTE[bucket as usize];
+            draw_list.fill_circle(particle.get_position(), radius, quantized_color);
         }
     }
 
@@ -209,6 +219,48 @@ impl ParticleEmitter {
     /// - `usize` - The live particle count.
     pub fn alive_count(&self) -> usize {
         self.get_particles().len()
+    }
+
+    /// Picks the palette index nearest to the given color by squared
+    /// Euclidean distance in 4-channel RGBA space.
+    ///
+    /// Used by the render path to snap each particle's interpolated color
+    /// to one of `PARTICLE_PALETTE_SIZE` preset colors. Quantizing collapses
+    /// the smooth color gradient produced by `Color::lerp` into a small set
+    /// of buckets, so many particles share the same `DrawCommand::FillCircle::color`
+    /// and the DrawList replay loop can coalesce `set_fill_style_str` calls
+    /// across the entire batch instead of switching style for every particle.
+    ///
+    /// # Arguments
+    ///
+    /// - `&Color` - The particle color to quantize.
+    ///
+    /// # Returns
+    ///
+    /// - `u8` - The index into `PARTICLE_PALETTE` of the nearest entry. The
+    ///   result fits in `u8` because `PARTICLE_PALETTE_SIZE` is 32.
+    pub(crate) fn quantize(color: &Color) -> u8 {
+        let target_red: f64 = color.get_red();
+        let target_green: f64 = color.get_green();
+        let target_blue: f64 = color.get_blue();
+        let target_alpha: f64 = color.get_alpha();
+        let mut best_index: usize = 0;
+        let mut best_distance: f64 = f64::INFINITY;
+        for (index, candidate) in PARTICLE_PALETTE.iter().enumerate() {
+            let delta_red: f64 = candidate.get_red() - target_red;
+            let delta_green: f64 = candidate.get_green() - target_green;
+            let delta_blue: f64 = candidate.get_blue() - target_blue;
+            let delta_alpha: f64 = candidate.get_alpha() - target_alpha;
+            let distance: f64 = delta_red * delta_red
+                + delta_green * delta_green
+                + delta_blue * delta_blue
+                + delta_alpha * delta_alpha;
+            if distance < best_distance {
+                best_distance = distance;
+                best_index = index;
+            }
+        }
+        best_index as u8
     }
 
     /// Removes all live particles without changing the active flag.

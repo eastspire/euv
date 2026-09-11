@@ -114,14 +114,31 @@ impl ToTokens for VarsDef {
                         }
                     })
                     .collect();
+                let param_idents: Vec<proc_macro2::TokenStream> = params
+                    .iter()
+                    .map(|param: &VarsParam| {
+                        let param_name: &Ident = param.get_name();
+                        quote! { #param_name }
+                    })
+                    .collect();
                 let name_format: String = format!("{{}}{STR_HYPHEN}{{}}");
-                tokens.extend(quote! {
-                        #visibility fn #name(#(#param_defs), *) -> ::euv::Css {
-                        let css: ::euv::Css = ::euv::Css::new(format!(#name_format, #class_name_str, [#(format!("{:?}", #param_names)), *].join(#STR_HYPHEN)), [#(#css_string_parts), *].concat(), Vec::new(), Vec::new());
-                        css.inject_style();
-                        css
-                    }
-                });
+                let unique_name_expr: proc_macro2::TokenStream = quote! { format!(#name_format, #class_name_str, [#(format!("{:?}", #param_names)), *].join(#STR_HYPHEN)) };
+                let style_expr: proc_macro2::TokenStream =
+                    quote! { [#(#css_string_parts), *].concat() };
+                emit_param_css_cache_fn(
+                    tokens,
+                    visibility,
+                    &quote! { #name },
+                    name.span(),
+                    &class_name_str,
+                    &param_idents,
+                    &unique_name_expr,
+                    &style_expr,
+                    &quote! { Vec::new() },
+                    &quote! { Vec::new() },
+                    &param_defs,
+                    &Generics::default(),
+                );
             }
             None => {
                 let name_span: Span = name.span();
