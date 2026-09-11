@@ -20,8 +20,10 @@ pub fn euv_nav_item(node: VirtualNode<EuvNavItemProps>) -> VirtualNode {
         class,
     }: EuvNavItemProps = node.try_get_props().unwrap_or_default();
     let target_string: String = target.to_string();
-    let current_route_value: String = route_signal.get();
-    let is_active: bool = current_route_value == target;
+    // OPT 30: compare directly without binding the route value to a local;
+    // `route_signal.get()` returns an owned `String` and the temporary
+    // drops after the comparison, avoiding a redundant binding.
+    let is_active: bool = route_signal.get() == target;
     let click_handler: NativeEventHandler = match on_click {
         Some(handler) => NativeEventHandler::create("click", move |event: Event| {
             event.prevent_default();
@@ -35,12 +37,34 @@ pub fn euv_nav_item(node: VirtualNode<EuvNavItemProps>) -> VirtualNode {
         c_nav_item_inactive()
     };
     let effective_class: String = match class {
-        Some(custom_class) => format!("{} {}", base_class.get_name(), custom_class.get_name()),
+        // OPT 30: avoid `format!` allocation by manually concatenating
+        // the two class names with `String::with_capacity` + two
+        // `push_str` calls. The previous `format!("{} {}", ...)` allocated
+        // an intermediate formatting buffer per render; the new form
+        // computes the exact final length and writes once.
+        Some(custom_class) => {
+            let base: &str = base_class.get_name();
+            let extra: &str = custom_class.get_name();
+            let mut joined: String = String::with_capacity(base.len() + 1 + extra.len());
+            joined.push_str(base);
+            joined.push(' ');
+            joined.push_str(extra);
+            joined
+        }
         None => base_class.get_name().to_string(),
     };
     html! {
         a {
-            href: format!("#{target_string}")
+            // OPT 30: avoid `format!("#...")` per render; pre-size and
+            // concatenate the constant `#` prefix with the target.
+            href: {
+                let mut
+                href: String =
+                String::with_capacity(ROUTE_HASH_PREFIX.len() + target_string.len());
+                href.push_str(ROUTE_HASH_PREFIX);
+                href.push_str(&target_string);
+                href
+            }
             target: BLANK_BROWSER_TARGET
             class: effective_class
             onclick: click_handler
@@ -76,8 +100,9 @@ pub fn euv_mobile_nav_item(node: VirtualNode<EuvMobileNavItemProps>) -> VirtualN
         on_navigate,
     }: EuvMobileNavItemProps = node.try_get_props().unwrap_or_default();
     let target_string: String = target.to_string();
-    let current_route_value: String = route_signal.get();
-    let is_active: bool = current_route_value == target;
+    // OPT 30: see the desktop `euv_nav_item` comment above — drop the
+    // temporary local and compare directly against the signal value.
+    let is_active: bool = route_signal.get() == target;
     let nav_target: String = target_string.clone();
     let on_mobile_nav_click = move |event: Event| {
         event.prevent_default();
@@ -88,7 +113,15 @@ pub fn euv_mobile_nav_item(node: VirtualNode<EuvMobileNavItemProps>) -> VirtualN
     };
     html! {
         a {
-            href: format!("#{target_string}")
+            // OPT 30: see comment on the desktop variant above.
+            href: {
+                let mut
+                href: String =
+                String::with_capacity(ROUTE_HASH_PREFIX.len() + target_string.len());
+                href.push_str(ROUTE_HASH_PREFIX);
+                href.push_str(&target_string);
+                href
+            }
             target: BLANK_BROWSER_TARGET
             class: if is_active {
                 c_nav_item_active()

@@ -74,7 +74,17 @@ fn render_md_block(block: &'static EuvMdBlock) -> VirtualNode {
         }
         EuvMdBlock::CodeBlock { lang, code } => html! {
             pre {
-                class: format!("language-{lang}")
+                // OPT 30: avoid `format!("language-{lang}")` per render;
+                // concatenate the constant prefix with the dynamic lang
+                // segment using a single pre-sized buffer.
+                class: {
+                    const LANG_PREFIX: &str = "language-";
+                    let mut class: String =
+                        String::with_capacity(LANG_PREFIX.len() + lang.len());
+                    class.push_str(LANG_PREFIX);
+                    class.push_str(lang);
+                    class
+                }
                 code {
                     { *code }
                 }
@@ -143,7 +153,16 @@ fn render_md_block(block: &'static EuvMdBlock) -> VirtualNode {
             let content: VirtualNode = euv_markdown_blocks(blocks);
             html! {
                 div {
-                    class: format!("docs-container {kind}")
+                    // OPT 30: same concat-with-constant pattern as the
+                    // `CodeBlock` branch above.
+                    class: {
+                        const DOCS_CONTAINER_PREFIX: &str = "docs-container ";
+                        let mut class: String =
+                            String::with_capacity(DOCS_CONTAINER_PREFIX.len() + kind.len());
+                        class.push_str(DOCS_CONTAINER_PREFIX);
+                        class.push_str(kind);
+                        class
+                    }
                     p {
                         class: "docs-container-title"
                         { *title }

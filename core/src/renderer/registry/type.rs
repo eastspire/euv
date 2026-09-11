@@ -35,3 +35,18 @@ pub type WindowEventHandlerEntry = (usize, *mut Box<dyn FnMut()>);
 /// event name share a single `window.addEventListener` listener (the proxy),
 /// which iterates this list and invokes each callback on every event.
 pub type WindowEventRegistryMap = HashMap<String, Vec<WindowEventHandlerEntry>>;
+
+/// Type alias for a single `NodeRef` registration in the unmount-clear registry.
+///
+/// NP-3: holds a clone of the `NodeRef`'s interior cell so `cleanup_subtree`
+/// can call `clear()` on every handle that pointed at a now-unmounted element.
+pub type NodeRefEntry = Rc<UnsafeCell<Option<JsValue>>>;
+
+/// Type alias for the `NodeRef` unmount-clear registry.
+///
+/// Maps `euv_id` (the same id used by the handler registry and `data-euv-id`
+/// attribute) to the list of `NodeRef` interior cells registered against that
+/// element. Removing an element from the DOM causes a single
+/// `HashMap::remove(&euv_id)` followed by iterating the entries to call
+/// `clear()` on each cell.
+pub type NodeRefRegistryMap = HashMap<usize, Vec<NodeRefEntry>>;

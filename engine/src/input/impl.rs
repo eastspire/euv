@@ -12,10 +12,8 @@ impl Input {
     ///
     /// - `String` - The key code string (e.g., `"KeyA"`, `"Space"`, `"ArrowLeft"`).
     pub fn extract_key_code(event: &Event) -> String {
-        Reflect::get(event.as_ref(), &JsValue::from_str(INPUT_KEY_CODE_PROPERTY))
-            .ok()
-            .and_then(|value: JsValue| value.as_string())
-            .unwrap_or_default()
+        // OPT 39: typed web-sys getter avoids the JS Reflect::get crossing.
+        event.unchecked_ref::<KeyboardEvent>().code()
     }
 
     /// Extracts the mouse button enum from a mouse event.
@@ -28,14 +26,9 @@ impl Input {
     ///
     /// - `MouseButton` - The mouse button that was pressed or released.
     pub fn extract_mouse_button(event: &Event) -> MouseButton {
-        let button_value: i32 = Reflect::get(
-            event.as_ref(),
-            &JsValue::from_str(INPUT_MOUSE_BUTTON_PROPERTY),
-        )
-        .ok()
-        .and_then(|value: JsValue| value.as_f64())
-        .map(|float: f64| float as i32)
-        .unwrap_or_default();
+        // OPT 39: typed web-sys `MouseEvent::button` getter instead of
+        // Reflect::get + as_f64 cast.
+        let button_value: i16 = event.unchecked_ref::<MouseEvent>().button();
         match button_value {
             0 => MouseButton::Left,
             1 => MouseButton::Middle,
@@ -56,16 +49,11 @@ impl Input {
     ///
     /// - `Vector2D` - The `(x, y)` client coordinates.
     pub fn extract_mouse_position(event: &Event) -> Vector2D {
-        let client_x: f64 =
-            Reflect::get(event.as_ref(), &JsValue::from_str(INPUT_CLIENT_X_PROPERTY))
-                .ok()
-                .and_then(|value: JsValue| value.as_f64())
-                .unwrap_or_default();
-        let client_y: f64 =
-            Reflect::get(event.as_ref(), &JsValue::from_str(INPUT_CLIENT_Y_PROPERTY))
-                .ok()
-                .and_then(|value: JsValue| value.as_f64())
-                .unwrap_or_default();
+        // OPT 39: typed web-sys `MouseEvent::client_x` / `client_y` getters
+        // instead of two Reflect::get + as_f64 casts per mouse event.
+        let mouse_event: &MouseEvent = event.unchecked_ref::<MouseEvent>();
+        let client_x: f64 = f64::from(mouse_event.client_x());
+        let client_y: f64 = f64::from(mouse_event.client_y());
         Vector2D::new(client_x, client_y)
     }
 }

@@ -86,7 +86,9 @@ impl SpatialHashGrid2D {
 
     /// Removes all entries from the grid, preparing it for a fresh insertion pass.
     pub fn clear(&mut self) {
-        self.get_mut_cells().clear();
+        // Preserve each cell's underlying Vec buffer across frames so the
+        // spatial hash doesn't pay a fresh allocation cost on every tick.
+        self.get_mut_cells().values_mut().for_each(Vec::clear);
     }
 
     /// Appends all candidate body indices overlapping the query box into `out`,
@@ -223,7 +225,9 @@ impl SpatialHashGrid3D {
 
     /// Removes all entries from the grid, preparing it for a fresh insertion pass.
     pub fn clear(&mut self) {
-        self.get_mut_cells().clear();
+        // Preserve each cell's underlying Vec buffer across frames so the
+        // spatial hash doesn't pay a fresh allocation cost on every tick.
+        self.get_mut_cells().values_mut().for_each(Vec::clear);
     }
 
     /// Appends all candidate body indices overlapping the query box into `out`,

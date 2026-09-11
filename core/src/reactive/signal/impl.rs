@@ -610,22 +610,31 @@ impl Signal<String> {
         if max_freed == 0 {
             return 0;
         }
-        // Snapshot the candidate addrs first so we can drop the &mut borrow
-        // on `BridgeRefsCell::map_mut()` before doing the unsafe free (Rust
-        // forbids holding the &mut across unsafe pointer manipulation in
-        // the same statement — clearer to split).
-        let candidates: Vec<usize> = {
+        // OPT 19: drain a small candidate queue instead of full-table
+        // scan + Vec allocation. We collect up to `max_freed` candidate
+        // addrs into a stack-friendly `Vec` with explicit capacity, then
+        // drop the `&mut` borrow on `BridgeRefsCell::map_mut()` before
+        // doing the unsafe free. Rust forbids holding the &mut across
+        // the unsafe pointer manipulation in the same statement, so the
+        // two-phase pattern is required regardless.
+        let mut candidates: Vec<usize> = Vec::with_capacity(max_freed);
+        {
             let map: &mut HashMap<usize, HashSet<usize>> = BridgeRefsCell::map_mut();
             let registry: &HashSet<usize> = Self::registry();
-            map.iter()
-                .filter(|(bridge_addr, sources)| {
-                    sources.is_empty() && !registry.contains(*bridge_addr)
-                })
-                .map(|(bridge_addr, _)| *bridge_addr)
-                .collect()
-        };
+            for (bridge_addr, sources) in map.iter() {
+                if candidates.len() >= max_freed {
+                    break;
+                }
+                // OPT 19: `bridge_addr` is already `&usize` from
+                // `HashMap::iter`, so pass it straight to
+                // `HashSet::contains` without an extra deref.
+                if sources.is_empty() && !registry.contains(bridge_addr) {
+                    candidates.push(*bridge_addr);
+                }
+            }
+        }
         let mut freed: usize = 0;
-        for bridge_addr in candidates.into_iter().take(max_freed) {
+        for bridge_addr in candidates.into_iter() {
             // Remove from BridgeRefsCell so a future sweep skips it.
             BridgeRefsCell::map_mut().remove(&bridge_addr);
             // Reclaim the heap allocation. The bridge is not in the registry

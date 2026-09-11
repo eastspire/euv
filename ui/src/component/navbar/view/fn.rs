@@ -46,7 +46,16 @@ pub fn euv_navbar(node: VirtualNode<EuvNavbarProps>) -> VirtualNode {
             menu_button
             a {
                 class: c_euv_navbar_brand()
-                href: format!("#{brand_href}")
+                // OPT 30: avoid `format!("#{...}")` per render; concatenate
+                // the constant `#` prefix with `brand_href` once.
+                href: {
+                    let mut
+                    href: String =
+                    String::with_capacity(ROUTE_HASH_PREFIX.len() + brand_href.len());
+                    href.push_str(ROUTE_HASH_PREFIX);
+                    href.push_str(brand_href);
+                    href
+                }
                 onclick: Router::link_handler(brand_href)
                 span {
                     class: c_euv_navbar_logo()
@@ -117,7 +126,16 @@ pub fn euv_navbar_link(node: VirtualNode<EuvNavbarLinkProps>) -> VirtualNode {
                 class: {
                     link_class()
                 }
-                href: format!("#{}", item.link)
+                // OPT 30: see comment in `euv_navbar` above — the same
+                // `#`-prefix concatenation replaces `format!("#{}", ...)`
+                // here.
+                href: {
+                    let mut href: String =
+                        String::with_capacity(ROUTE_HASH_PREFIX.len() + item.link.len());
+                    href.push_str(ROUTE_HASH_PREFIX);
+                    href.push_str(item.link);
+                    href
+                }
                 onclick: Router::link_handler(item.link)
                 {
                     item.text
