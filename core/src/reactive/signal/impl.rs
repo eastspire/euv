@@ -571,6 +571,14 @@ impl Signal<String> {
         inner.set_alive(false);
         inner.set_value(String::new());
         Registry::cleanup_attr_slot(addr);
+        // OPT 6 (rewrite): drop the typed `AttributeBridge` registered
+        // for this bridge signal. The bridge listener (which captures the
+        // bridge struct) is gone with the listener clear above, so the
+        // bridge's `Element`/`Text` reference is no longer reachable.
+        // This frees the bridge's heap allocation at the same moment the
+        // bridge signal's listener closure is dropped, eliminating the
+        // earlier per-bridge `HashSet<usize>` in `BridgeRefsCell`.
+        Registry::cleanup_attribute_bridge(addr);
         // The bridge's element is gone; remove it from the global registry
         // so subsequent reads via `is_alive` return false. The heap
         // allocation itself is NOT freed here — that happens in
