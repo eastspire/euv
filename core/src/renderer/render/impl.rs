@@ -942,7 +942,7 @@ impl Renderer {
                 if let Some(signal) = text_node.try_get_signal() {
                     let signal: Signal<String> = *signal;
                     let bridge_signal: Signal<String> =
-                        Signal::create(text_node.get_content().clone());
+                        Signal::create(text_node.get_content().to_string());
                     let text_clone: Text = text.clone();
                     bridge_signal.replace_listener(move || {
                         if !Renderer::is_node_connected(&text_clone) {
@@ -1296,17 +1296,16 @@ impl Renderer {
             && let Ok(euv_id) = euv_id_str.parse::<usize>()
         {
             Registry::cleanup_element(euv_id);
+            if let Some(addrs) = SignalAddrs::take(euv_id) {
+                for addr in addrs {
+                    Signal::<String>::clear_listeners(addr);
+                }
+            }
         }
         if let Some(dynamic_id_str) = element.get_attribute(DATA_EUV_DYNAMIC_ID)
             && let Ok(dynamic_id) = dynamic_id_str.parse::<usize>()
         {
             Registry::cleanup_dynamic_node(dynamic_id);
-        }
-        if let Some(signal_addrs_str) = element.get_attribute(DATA_EUV_SIGNAL_ADDRS) {
-            signal_addrs_str
-                .split(CHAR_SIGNAL_ADDRS_SEPARATOR)
-                .filter_map(|addr_str: &str| addr_str.parse::<usize>().ok())
-                .for_each(Signal::<String>::clear_listeners);
         }
         let child_nodes: NodeList = element.child_nodes();
         let length: u32 = child_nodes.length();
