@@ -4,7 +4,10 @@ use super::*;
 ///
 /// Renders a labeled input wrapped in `c_euv_input_wrapper`. When the `error`
 /// signal is provided and non-empty, the input switches to error styling
-/// (`c_euv_input_error`) and the error text is displayed below.
+/// (`c_euv_input_error`) and the error text is displayed below. The input
+/// also binds `onfocus` / `onblur` so mobile virtual keyboards never
+/// obscure the field — the handler reads `--euv-keyboard-height` and
+/// scrolls the input above the IME with a 12px gap.
 ///
 /// # Arguments
 ///
@@ -53,6 +56,8 @@ pub fn euv_field(node: VirtualNode<EuvFieldProps>) -> VirtualNode {
                     c_euv_input_no_transition()
                 }
                 oninput: handler
+                onfocus: UseEuvInput::on_focus_scroll_into_view()
+                onblur: UseEuvInput::on_blur_restore_height()
             }
             if { !error_state.get().is_empty() } {
                 p {
