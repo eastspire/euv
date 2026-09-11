@@ -3591,7 +3591,7 @@ class! {
         position: "absolute";
         top: "44px";
         right: "0px";
-        /* `width: 100%` instead of `min-width: 140px` so the menu
+    /* `width: 100%` instead of `min-width: 140px` so the menu
                                                                                                                                                            matches the dropdown container (and therefore the
                                                                                                                                                            trigger button) width exactly. With only `min-width`,
                                                                                                                                                            a trigger wider than 140px (e.g. the 206px-wide
