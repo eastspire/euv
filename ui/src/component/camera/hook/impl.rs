@@ -1,4 +1,17 @@
 use super::*;
+use std::cell::RefCell;
+
+thread_local! {
+    /// Cache of the `BarcodeDetector#detect` `Function`. There is at
+    /// most one active `BarcodeDetector` per scan session (created in
+    /// `start_qr_scan`), so a single slot is enough. The `Function` is
+    /// fetched once via `Reflect::get(detector, "detect")` and reused
+    /// across every scan tick — the per-tick `Reflect::get` +
+    /// `JsValue::from_str("detect")` allocation is eliminated.
+    static DETECT_FN_CACHE: RefCell<Option<Function>> = const { RefCell::new(None) };
+}
+
+const DETECT_FN_KEY: &str = "detect";
 
 /// Implementation of camera functionality.
 impl UseEuvCamera {
@@ -186,6 +199,36 @@ impl UseEuvCamera {
         }
     }
 
+    /// Returns the cached `BarcodeDetector#detect` `Function`, populating
+    /// the cache on first lookup.
+    ///
+    /// The original code called `Reflect::get(detector, "detect")` every
+    /// scan tick, allocating a fresh `JsValue::from_str("detect")` JS
+    /// string and crossing the FFI boundary. The cached `Function` is
+    /// reused for the lifetime of the scan session.
+    ///
+    /// # Arguments
+    ///
+    /// - `&JsValue` - The `BarcodeDetector` instance.
+    ///
+    /// # Returns
+    ///
+    /// - `Function` - A clone of the cached `detect` function, or a
+    ///   no-op `Promise.resolve([])` fallback when lookup fails.
+    fn cached_detect_fn(detector: &JsValue) -> Function {
+        DETECT_FN_CACHE.with(|cache: &RefCell<Option<Function>>| {
+            if let Some(function) = cache.borrow().as_ref() {
+                return function.clone();
+            }
+            let function: Function = Reflect::get(detector, &JsValue::from_str(DETECT_FN_KEY))
+                .ok()
+                .and_then(|value: JsValue| value.dyn_into::<Function>().ok())
+                .unwrap_or_else(|| Function::new_no_args("return Promise.resolve([])"));
+            *cache.borrow_mut() = Some(function.clone());
+            function
+        })
+    }
+
     /// Starts a periodic QR code scan using the browser `BarcodeDetector` API.
     ///
     /// If the browser does not support `BarcodeDetector`, the scan is not
@@ -193,6 +236,13 @@ impl UseEuvCamera {
     /// the current video frame and attempts to detect a QR code. If a QR
     /// code is found, the result is stored in `scan_result`. If the result
     /// is an HTTP URL, the browser navigates directly to that URL.
+    ///
+    /// The on_detected / on_scan_error `Closure`s are created once per
+    /// scan session and stored in `ON_QR_DETECTED_CLOSURE` /
+    /// `ON_QR_SCAN_ERROR_CLOSURE` thread-locals; per-tick
+    /// `Closure::wrap` + `.forget()` is eliminated (memory leak fix
+    /// from audit #26). The `detect` method is cached in
+    /// `DETECT_FN_CACHE` (audit #26 per-tick `Reflect::get` cost).
     ///
     /// # Arguments
     ///
@@ -231,7 +281,43 @@ impl UseEuvCamera {
         };
         let video_selector: Rc<String> = Rc::new(cfg.video_selector.to_string());
         let on_qr_detected: Option<QrDetectedCallback> = cfg.on_qr_detected.clone();
+        let self_for_closure: UseEuvCamera = self;
+        let video_selector_for_closure: Rc<String> = video_selector.clone();
+        let on_qr_detected_for_closure: Option<QrDetectedCallback> = on_qr_detected.clone();
+        let on_detected: Closure<dyn FnMut(JsValue)> =
+            Closure::wrap(Box::new(move |barcodes_value: JsValue| {
+                let barcodes: Array = match barcodes_value.dyn_into::<Array>() {
+                    Ok(array) => array,
+                    Err(_) => return,
+                };
+                if barcodes.length() == 0 {
+                    return;
+                }
+                let text: Option<String> = barcodes.get(0).as_string().or_else(|| {
+                    Reflect::get(&barcodes.get(0), &JsValue::from_str("rawValue"))
+                        .ok()
+                        .and_then(|v: JsValue| v.as_string())
+                });
+                if let Some(text) = text {
+                    self_for_closure.get_scan_result().set(text.clone());
+                    if let Some(ref callback) = on_qr_detected_for_closure {
+                        callback(&text);
+                    }
+                    if Self::is_valid_qr_url(&text) {
+                        self_for_closure.stop_qr_scan();
+                        Self::close(&video_selector_for_closure);
+                        self_for_closure.get_camera_open().set(false);
+                        Self::navigate_qr_url(&text);
+                    }
+                }
+            }));
+        let on_scan_error: Closure<dyn FnMut(JsValue)> =
+            Closure::wrap(Box::new(move |_error: JsValue| {}));
+        let detect_fn: Function = Self::cached_detect_fn(&detector);
         let handle: IntervalHandle = App::use_interval(cfg.scan_interval_millis, move || {
+            let on_detected: &Closure<dyn FnMut(JsValue)> = &on_detected;
+            let on_scan_error: &Closure<dyn FnMut(JsValue)> = &on_scan_error;
+            let detect_fn: &Function = &detect_fn;
             let Some(window_value) = window() else {
                 return;
             };
@@ -245,50 +331,13 @@ impl UseEuvCamera {
             if video_element.ready_state() != HtmlMediaElement::HAVE_ENOUGH_DATA {
                 return;
             }
-            let detect_fn: Function = Reflect::get(&detector, &JsValue::from_str("detect"))
-                .ok()
-                .and_then(|value: JsValue| value.dyn_into::<Function>().ok())
-                .unwrap_or_else(|| Function::new_no_args("return Promise.resolve([])"));
             let promise: Promise = match detect_fn.call1(&detector, &video_element) {
                 Ok(result) => result.into(),
                 Err(_) => return,
             };
-            let on_qr_detected_clone: Option<QrDetectedCallback> = on_qr_detected.clone();
-            let video_selector_clone: Rc<String> = video_selector.clone();
-            let on_detected: Closure<dyn FnMut(JsValue)> =
-                Closure::wrap(Box::new(move |barcodes_value: JsValue| {
-                    let barcodes: Array = match barcodes_value.dyn_into::<Array>() {
-                        Ok(array) => array,
-                        Err(_) => return,
-                    };
-                    if barcodes.length() == 0 {
-                        return;
-                    }
-                    let text: Option<String> = barcodes.get(0).as_string().or_else(|| {
-                        Reflect::get(&barcodes.get(0), &JsValue::from_str("rawValue"))
-                            .ok()
-                            .and_then(|v: JsValue| v.as_string())
-                    });
-                    if let Some(text) = text {
-                        self.get_scan_result().set(text.clone());
-                        if let Some(ref callback) = on_qr_detected_clone {
-                            callback(&text);
-                        }
-                        if Self::is_valid_qr_url(&text) {
-                            self.stop_qr_scan();
-                            Self::close(&video_selector_clone);
-                            self.get_camera_open().set(false);
-                            Self::navigate_qr_url(&text);
-                        }
-                    }
-                }));
-            let on_scan_error: Closure<dyn FnMut(JsValue)> =
-                Closure::wrap(Box::new(move |_error: JsValue| {}));
-            let _: Promise = promise.then(&on_detected).catch(&on_scan_error);
-            on_detected.forget();
-            on_scan_error.forget();
+            let _: Promise = promise.then(on_detected).catch(on_scan_error);
         });
-        self.get_scan_handle().set(Some(handle));
+        self_for_closure.get_scan_handle().set(Some(handle));
     }
 
     /// Stops the periodic QR code scan timer if it is running.
@@ -297,6 +346,9 @@ impl UseEuvCamera {
             handle.clear();
             self.get_scan_handle().set(None);
         }
+        DETECT_FN_CACHE.with(|cache: &RefCell<Option<Function>>| {
+            *cache.borrow_mut() = None;
+        });
     }
 
     /// Checks whether the given string is a valid QR code URL that the

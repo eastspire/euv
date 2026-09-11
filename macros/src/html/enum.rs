@@ -128,15 +128,17 @@ pub(crate) enum HtmlStylePropValue {
 
 /// Determines how `attr_if_to_tokens` wraps each branch body during code generation.
 ///
-/// - `Reactive` - Each branch body is wrapped with `IntoReactiveString::into_reactive_string()`,
+/// - `Reactive` - Each branch body is wrapped with `.to_string()`,
 ///   ensuring all branches produce a `String`. Used for `class` and `style` attributes
 ///   where the `if` and implicit `else` branches may return different types
-///   (e.g., `Css` vs `&str`).
+///   (e.g., `Css` vs `&str`). The resulting closure is fed to
+///   `AttributeValue::reactive<F: Fn() -> String + 'static>`, so the per-call
+///   `.to_string()` alloc is required by the contract.
 /// - `Raw` - Branch bodies are emitted as-is without wrapping. Used for component props
-///   where the branch types are already consistent or handled externally.
+///   where branch types are already consistent or handled externally.
 #[derive(Clone, Copy, Debug, Default, DisplayDebug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) enum AttrIfMode {
-    /// Wrap each branch body with `IntoReactiveString::into_reactive_string()`.
+    /// Wrap each branch body with `.to_string()` so the closure returns `String`.
     Reactive,
     /// Emit branch bodies as-is without any wrapping.
     #[default]
