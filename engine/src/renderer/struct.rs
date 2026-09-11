@@ -322,12 +322,12 @@ pub struct WebGpuRenderer {
     /// first call to [`WebGpuRenderer::begin_render_pass_full`].
     ///
     /// The pre-WebGPU-audit path allocated a fresh `Object` +
-    /// `Array` + 8-15 `Reflect::set` calls every frame, even though
-    /// only the `clearValue` actually changes. We keep the descriptor
-    /// Object alive for the renderer's lifetime, mutating only the
-    /// fields whose values differ from the last call. The cache
-    /// invalidates itself automatically when `load_op` / `store_op`
-    /// or the depth-stencil shape changes.
+    /// `Array` + 8-15 `Reflect::set` calls every frame. We keep the
+    /// descriptor Object alive for the renderer's lifetime, refreshing
+    /// the per-frame fields (`view`, `resolveTarget`, `clearValue`) in
+    /// place on every call. The cache invalidates itself automatically
+    /// when `load_op` / `store_op`, the depth-stencil shape, or the
+    /// resolve-target shape changes.
     ///
     /// `None` until the first `begin_render_pass_full` call; `Some(_)`
     /// afterwards and persists for the lifetime of the renderer.
@@ -371,7 +371,12 @@ pub struct WebGpuRenderer {
 /// The cache is invalidated (rebuilt from scratch) when any of:
 /// - `load_op` changes between calls,
 /// - `store_op` changes between calls,
-/// - the depth-stencil shape changes (None → Some / Some → None).
+/// - the depth-stencil shape changes (None → Some / Some → None),
+/// - the resolve-target shape changes (MSAA on/off).
+///
+/// `view` / `resolveTarget` / `clearValue` are refreshed on every call
+/// (the swap-chain view expires after each presented frame, so caching
+/// it across frames silently invalidates every subsequent render pass).
 ///
 /// These are all `&'static str` (they come from `WEBGPU_*_OP_*`
 /// constants), so invalidation is a pointer-compare.
@@ -403,6 +408,11 @@ pub(crate) struct RenderPassDescriptorCache {
     /// attachment (`true`) or not (`false`). Used to detect shape
     /// changes that invalidate the descriptor.
     pub(crate) last_has_depth: bool,
+    /// Whether the last applied descriptor had a `resolveTarget`
+    /// (`true`, MSAA path) or not (`false`). Used to detect shape
+    /// changes that invalidate the descriptor, so a stale
+    /// `resolveTarget` never survives an MSAA -> non-MSAA switch.
+    pub(crate) last_has_resolve: bool,
 }
 
 /// Describes a 2D viewport rectangle plus optional depth range, in the same

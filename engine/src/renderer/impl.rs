@@ -2631,12 +2631,14 @@ impl WebGpuRenderer {
         let effective_load_op: &'static str = color.effective_load_op();
         let effective_store_op: &'static str = color.effective_store_op();
         let has_depth: bool = depth.is_some();
+        let has_resolve: bool = resolve_view.is_some();
         let cache_needs_rebuild: bool = match self.render_pass_descriptor_cache.as_ref() {
             None => true,
             Some(existing) => {
                 existing.last_load_op != Some(effective_load_op)
                     || existing.last_store_op != Some(effective_store_op)
                     || existing.last_has_depth != has_depth
+                    || existing.last_has_resolve != has_resolve
             }
         };
         if cache_needs_rebuild {
@@ -2680,6 +2682,21 @@ impl WebGpuRenderer {
             &cached_method_name(WEBGPU_PROPERTY_VIEW),
             &color_view,
         );
+        // `resolveTarget` is the per-frame swap-chain view on the MSAA
+        // path (`context.getCurrentTexture()` textures expire when the
+        // frame is presented), so it MUST be refreshed every frame —
+        // keeping the first frame's view makes every subsequent
+        // `beginRenderPass` fail validation silently (black canvas).
+        // When the caller drops MSAA mid-stream the Some/None shape
+        // change triggers a rebuild above, so the `None` arm here never
+        // leaves a stale `resolveTarget` behind.
+        if let Some(target) = resolve_view.as_ref() {
+            let _: Result<bool, JsValue> = Reflect::set(
+                &cache.attachment,
+                &cached_method_name(WEBGPU_PROPERTY_RESOLVE_TARGET),
+                target,
+            );
+        }
         if let Some(cv) = color.clear_value {
             let _: Result<bool, JsValue> = Reflect::set(
                 &cache.clear_value,
@@ -2713,9 +2730,10 @@ impl WebGpuRenderer {
                 );
             }
         }
-        // `resolveTarget` and the `descriptor.colorAttachments[0]`
-        // slot are stable for the cache's lifetime; they were set
-        // once when the descriptor was built.
+        // The `descriptor.colorAttachments[0]` slot is stable for the
+        // cache's lifetime (set once when the descriptor was built);
+        // `view` / `resolveTarget` / `clearValue` are refreshed above
+        // on every call.
         let begin_fn: Function = cached_method(encoder, WEBGPU_METHOD_BEGIN_RENDER_PASS)
             .unwrap_or_else(|_| JsValue::UNDEFINED.unchecked_into());
         begin_fn
@@ -2879,6 +2897,7 @@ impl WebGpuRenderer {
             last_load_op: Some(effective_load_op),
             last_store_op: Some(effective_store_op),
             last_has_depth,
+            last_has_resolve: resolve_view.is_some(),
         }
     }
 
