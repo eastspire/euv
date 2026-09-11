@@ -528,6 +528,13 @@ impl Renderer {
     /// After processing all new children, removes any old DOM nodes whose
     /// keys are no longer present in the new list.
     ///
+    /// OPT 11: move plan is computed via an O(N log N) LIS (Longest
+    /// Increasing Subsequence) over the kept old indices. Only the
+    /// children whose kept position is OUTSIDE the LIS need an
+    /// `insert_before`; LIS children stay in place (they are still at
+    /// the right relative DOM position after the removal pass and any
+    /// earlier non-LIS moves).
+    ///
     /// # Arguments
     ///
     /// - `&Element` - The parent DOM element.
@@ -545,6 +552,10 @@ impl Renderer {
         // JS round-trip per child.
         let child_nodes: NodeList = parent.child_nodes();
         let dom_child_count: u32 = child_nodes.length();
+        // Single HashMap<key, (old_index, dom_node)>. Drives both the
+        // removal pass (key not in new) and the new-child walk (key in
+        // new → reuse the existing DOM node). No HashSet needed; the
+        // LIS lookup uses Vec index sets instead.
         let mut old_key_to_node: HashMap<&str, (usize, Node)> =
             HashMap::with_capacity(old_children.len());
         for (index, old_child) in old_children.iter().enumerate() {
@@ -557,25 +568,61 @@ impl Renderer {
                 }
             }
         }
-        let mut new_key_set: HashSet<&str> = HashSet::with_capacity(new_children.len());
+        // OPT 11: build `kept_old_indices` for keyed new children whose
+        // key is in `old_key_to_node`. Values are old positions in the
+        // pre-removal DOM. Indexing into this Vec is the `kept_pos`
+        // used by the LIS membership test below.
+        let mut kept_old_indices: Vec<usize> = Vec::with_capacity(new_children.len());
+        // `kept_pos_for_new[new_index]` is `Some(kept_pos)` when the
+        // new child at `new_index` is kept (key was in old), `None`
+        // when the new child is genuinely new. Used during the new-
+        // child walk to route kept nodes to the LIS fast path.
+        let mut kept_pos_for_new: Vec<Option<usize>> = Vec::with_capacity(new_children.len());
         for new_child in new_children.iter() {
-            if let Some(key) = new_child.key() {
-                new_key_set.insert(key);
+            if let Some(key) = new_child.key()
+                && let Some(&(old_index, _)) = old_key_to_node.get(key)
+            {
+                kept_pos_for_new.push(Some(kept_old_indices.len()));
+                kept_old_indices.push(old_index);
+            } else {
+                kept_pos_for_new.push(None);
             }
         }
-        for (index, old_child) in old_children.iter().enumerate() {
-            if let Some(key) = old_child.key() {
-                if !new_key_set.contains(key)
-                    && let Some((_old_index, dom_node)) = old_key_to_node.remove(key)
-                {
-                    if let Some(element) = dom_node.dyn_ref::<Element>() {
-                        Self::cleanup_subtree(element);
-                    }
-                    let _: Result<Node, JsValue> = parent.remove_child(&dom_node);
+        // Compute the LIS (leftmost / earliest-positions variant) once
+        // over the kept old indices. `in_lis_set[kept_pos] == true`
+        // means the corresponding new child does NOT need an
+        // `insert_before` move during the new-child walk below.
+        let lis: Vec<usize> = lis_indices(&kept_old_indices);
+        let mut in_lis_set: Vec<bool> = vec![false; kept_old_indices.len()];
+        for &lis_pos in lis.iter() {
+            in_lis_set[lis_pos] = true;
+        }
+        // Removal pass: every old key not in new gets its DOM node removed
+        // and dropped from `old_key_to_node`. After this pass,
+        // `old_key_to_node` contains only keys that are present in
+        // both old and new (the kept children).
+        let mut keys_to_remove: Vec<&str> = Vec::new();
+        for key in old_key_to_node.keys() {
+            let key_in_new: bool = new_children.iter().any(|nc| nc.key() == Some(key));
+            if !key_in_new {
+                keys_to_remove.push(*key);
+            }
+        }
+        for key in keys_to_remove.iter() {
+            if let Some((_old_index, dom_node)) = old_key_to_node.remove(*key) {
+                if let Some(element) = dom_node.dyn_ref::<Element>() {
+                    Self::cleanup_subtree(element);
                 }
-            } else {
+                let _: Result<Node, JsValue> = parent.remove_child(&dom_node);
+            }
+        }
+        // Defensive removal of unkeyed old children (should not occur
+        // because `patch_children` only dispatches here when both
+        // lists are fully keyed).
+        for (index, old_child) in old_children.iter().enumerate() {
+            if old_child.key().is_none() {
                 let dom_index: u32 = index as u32;
-                if dom_index < dom_child_count
+                if dom_index < child_nodes.length()
                     && let Some(dom_node) = child_nodes.get(dom_index)
                 {
                     if let Some(element) = dom_node.dyn_ref::<Element>() {
@@ -585,31 +632,57 @@ impl Renderer {
                 }
             }
         }
+        // OPT 11 walk: for each new child in order, either reuse the
+        // existing DOM node (and move it ONLY if it is outside the
+        // LIS) or create a fresh DOM node and insert it.
         for (new_index, new_child) in new_children.iter().enumerate() {
-            let new_key: &str = new_child.key().unwrap_or_default();
             let target_index: u32 = new_index as u32;
             // OPT 3: same hoisted NodeList, no re-fetch.
             let current_at_target: Option<Node> = child_nodes.get(target_index);
-            if let Some((old_vnode_index, dom_node)) = old_key_to_node.remove(new_key) {
-                let old_child: &VirtualNode = &old_children[old_vnode_index];
-                if let Some(element) = dom_node.dyn_ref::<Element>() {
-                    self.patch_node(old_child, new_child, element);
+            match kept_pos_for_new[new_index] {
+                Some(kept_pos) => {
+                    // Reuse existing DOM node.
+                    let new_key: &str = match new_child.key() {
+                        Some(k) => k,
+                        None => continue,
+                    };
+                    let (old_vnode_index, dom_node): (usize, Node) =
+                        match old_key_to_node.remove(new_key) {
+                            Some(entry) => entry,
+                            None => continue,
+                        };
+                    let old_child: &VirtualNode = &old_children[old_vnode_index];
+                    if let Some(element) = dom_node.dyn_ref::<Element>() {
+                        self.patch_node(old_child, new_child, element);
+                    }
+                    if !in_lis_set[kept_pos] {
+                        // Non-LIS: detach from current DOM position
+                        // and re-insert at the target index so the
+                        // live NodeList reflects the new ordering
+                        // for the next iteration. Skip the move if
+                        // an earlier non-LIS insert already shifted
+                        // this node into place.
+                        if current_at_target.as_ref() != Some(&dom_node) {
+                            if let Some(reference_node) = current_at_target {
+                                let _: Result<Node, JsValue> =
+                                    parent.insert_before(&dom_node, Some(&reference_node));
+                            } else {
+                                let _: Result<Node, JsValue> = parent.append_child(&dom_node);
+                            }
+                        }
+                    }
+                    // If `in_lis`, the DOM node already sits at
+                    // position `target_index`; no insert_before.
                 }
-                if current_at_target.as_ref() != Some(&dom_node) {
+                None => {
+                    // New key (not in old) — create DOM and insert.
+                    let new_dom_node: Node = self.create_dom_node(new_child);
                     if let Some(reference_node) = current_at_target {
                         let _: Result<Node, JsValue> =
-                            parent.insert_before(&dom_node, Some(&reference_node));
+                            parent.insert_before(&new_dom_node, Some(&reference_node));
                     } else {
-                        let _: Result<Node, JsValue> = parent.append_child(&dom_node);
+                        let _: Result<Node, JsValue> = parent.append_child(&new_dom_node);
                     }
-                }
-            } else {
-                let new_dom_node: Node = self.create_dom_node(new_child);
-                if let Some(reference_node) = current_at_target {
-                    let _: Result<Node, JsValue> =
-                        parent.insert_before(&new_dom_node, Some(&reference_node));
-                } else {
-                    let _: Result<Node, JsValue> = parent.append_child(&new_dom_node);
                 }
             }
         }
