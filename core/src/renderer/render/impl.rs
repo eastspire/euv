@@ -823,29 +823,34 @@ impl Renderer {
                 .collect();
             append_nodes(parent, appended);
         } else if old_len > new_len {
-            // OPT 16: collect all trailing `remove_child` ops first by
-            // walking `parent.last_child()` once per deletion, then
-            // flush them via a single batched JS call. The previous
-            // loop paid 2N crossings (`last_child` + `remove_child`).
-            // Now it pays N crossings (still need `last_child` per
-            // deletion because remove-by-position is the only sane way
-            // to walk a shrinking tail) for the resolve step plus 1
-            // crossing for the batched commit.
+            // OPT 16: collect all trailing `remove_child` ops and flush
+            // them via a single batched JS call.
+            //
+            // #12 regression fix: the nodes to remove are collected BY
+            // INDEX from the hoisted live `NodeList`
+            // (`common_len..old_len`), not by re-querying
+            // `parent.last_child()` per iteration. Because the removals
+            // are deferred until the batch flush below, a `last_child`
+            // loop observes the SAME trailing node on every iteration
+            // and queues N duplicate `RemoveChild` ops for a single
+            // child — clearing an N-row list detached only one row and
+            // left N-1 stale rows in the DOM, and the first duplicate
+            // `removeChild` threw `NotFoundError` inside the JS batch
+            // helper, aborting the remaining ops. Index-based
+            // collection resolves each distinct tail node exactly once;
+            // the prefix patch loop above never changes the parent's
+            // child count (`replace_child` is index-preserving), so the
+            // hoisted NodeList stays aligned with `old_children`.
             let mut remove_ops: Vec<ChildOp> = Vec::with_capacity(old_len - common_len);
-            for _ in common_len..old_len {
-                // #12: the previous loop called `parent.last_child()`
-                // twice per deletion (2 → 1 JS crossing) so the same
-                // detached last child could be cleaned up before being
-                // removed.
-                let last_child: Option<Node> = parent.last_child();
-                if let Some(last_child) = &last_child
-                    && let Some(element) = last_child.dyn_ref::<Element>()
-                {
+            for index in common_len..old_len {
+                let dom_index: u32 = index as u32;
+                let Some(dom_child) = child_nodes.get(dom_index) else {
+                    continue;
+                };
+                if let Some(element) = dom_child.dyn_ref::<Element>() {
                     Self::cleanup_subtree(element);
                 }
-                if let Some(last_child) = last_child {
-                    remove_ops.push(ChildOp::RemoveChild(last_child));
-                }
+                remove_ops.push(ChildOp::RemoveChild(dom_child));
             }
             apply_child_ops_batch(parent, &remove_ops);
         }
