@@ -101,12 +101,18 @@ fn install_dom_op_table(global_value: &JsValue) -> Option<DomOpTable> {
     let child_ops_source: &str = "function(parent, ops) { \
         for (var i = 0; i < ops.length; i++) { \
             var op = ops[i]; \
-            if (op[0] === 0) { \
-                parent.insertBefore(op[1], op[2]); \
-            } else if (op[0] === 1) { \
-                parent.appendChild(op[1]); \
-            } else { \
-                parent.removeChild(op[1]); \
+            try { \
+                if (op[0] === 0) { \
+                    parent.insertBefore(op[1], op[2]); \
+                } else if (op[0] === 1) { \
+                    parent.appendChild(op[1]); \
+                } else { \
+                    parent.removeChild(op[1]); \
+                } \
+            } catch (e) { \
+                // One failing op (e.g. a stale reference node) must not \
+                // abort the rest of the batch; the Rust fallback path \
+                // drops per-op errors the same way. \
             } \
         } \
     }";
