@@ -58,9 +58,7 @@ where
     /// When this signal changes, only these dynamic nodes are marked dirty
     /// instead of broadcasting to all registered dynamic nodes.
     #[debug(skip)]
-    #[get(pub(crate))]
     #[get_mut(pub(crate))]
-    #[set(pub(crate))]
     #[new(skip)]
     pub(crate) dependents: Vec<usize>,
 }
@@ -69,17 +67,16 @@ where
 ///
 /// Allows reading, writing, and subscribing to changes.
 /// Implements `Clone` and `Copy` for ergonomic use; all copies share the same
-/// underlying state. The inner state is heap-allocated via `Box` and accessed
-/// through a raw pointer stored as a `usize`. The allocation is tracked in a
-/// global registry for lifecycle management. The `Copy` semantics are safe
-/// because only the pointer address is copied — the actual heap allocation
-/// is owned by the registry.
+/// underlying state. The inner state lives in the global append-only signal
+/// slab and the handle carries its slot index as a `usize`. The `Copy`
+/// semantics are safe because only the slot index is copied — the actual
+/// slot is owned by the slab and is never freed or recycled.
 #[derive(CustomDebug, Data, Eq, Hash, New, Ord, PartialEq, PartialOrd)]
 pub struct Signal<T>
 where
     T: Clone + PartialEq + 'static,
 {
-    /// Address of the heap-allocated inner state (`*mut SignalInner<T>`).
+    /// Slot index of the inner state in the global signal slab.
     #[debug(skip)]
     #[get(pub, type(copy))]
     #[get_mut(pub(crate))]

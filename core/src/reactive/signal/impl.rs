@@ -66,19 +66,21 @@ where
     pub fn get(&self) -> T {
         let idx: usize = self.get_inner();
         let Some(inner) = Self::slab_mut().get_mut::<T>(idx) else {
-            // Out-of-bounds handle: the slot index was never issued by this
-            // slab (a corrupted or foreign handle). Slots are never freed or
-            // recycled, so this branch is unreachable for any handle produced
-            // by `Signal::create`. Returning a zero-initialized `T` keeps the
-            // defensive contract deterministic instead of panicking.
-            return unsafe { std::mem::zeroed() };
+            // Unresolvable handle: the slot index was never issued by this
+            // slab or belongs to a different concrete `T` (a corrupted or
+            // forged handle). Slots are never freed or recycled, so any
+            // handle produced by `Signal::create` always resolves; a `None`
+            // here is a program bug, and panicking is strictly better than
+            // vending a zero-initialized `T` (unsound for non-zeroable
+            // types such as `String` / `Vec`).
+            unreachable!("Signal handle does not resolve to a slab slot");
         };
         if !inner.get_alive() {
             return inner.get_value().clone();
         }
         let tracking_id: usize = CURRENT_TRACKING_DYNAMIC_ID.load(Ordering::Relaxed);
         if tracking_id != usize::MAX {
-            self.add_dependent(tracking_id);
+            Self::push_dependent(inner, tracking_id);
         }
         inner.get_value().clone()
     }
@@ -106,17 +108,17 @@ where
     {
         let idx: usize = self.get_inner();
         let Some(inner) = Self::slab_mut().get_mut::<T>(idx) else {
-            // Out-of-bounds handle: unreachable for slab-issued handles (see
-            // `get`). We avoid adding an `R: Default` bound to preserve the
-            // public API (R is whatever the closure returns).
-            return unsafe { std::mem::zeroed() };
+            // Unresolvable handle: unreachable for slab-issued handles (see
+            // `get`). Panic instead of vending a zero-initialized `R`, which
+            // would be unsound for non-zeroable return types.
+            unreachable!("Signal handle does not resolve to a slab slot");
         };
         if !inner.get_alive() {
             return f(inner.get_value());
         }
         let tracking_id: usize = CURRENT_TRACKING_DYNAMIC_ID.load(Ordering::Relaxed);
         if tracking_id != usize::MAX {
-            self.add_dependent(tracking_id);
+            Self::push_dependent(inner, tracking_id);
         }
         f(inner.get_value())
     }
@@ -272,15 +274,12 @@ where
         true
     }
 
-    /// Registers a dynamic node ID as a dependent of this signal.
+    /// Registers a dynamic node ID as a dependent of the signal whose inner
+    /// state is already mutably borrowed by the caller.
     ///
-    /// When this signal changes, only its registered dependents will be
-    /// marked dirty for re-rendering, enabling precise updates instead
-    /// of broadcasting to all dynamic nodes.
-    ///
-    /// # Arguments
-    ///
-    /// - `usize` - The dynamic node ID to register as a dependent.
+    /// Fused form of the former `add_dependent`: `get` / `with` already hold
+    /// the slab borrow for the value read, so the dependent push happens on
+    /// the same borrow instead of resolving the slot a second time.
     ///
     /// OPT 9: the common rendering case is "this dependent was just added
     /// (last element of the list)". A `deps.last() == Some(&dynamic_id)`
@@ -288,10 +287,7 @@ where
     /// typical append-into-existing-list call from O(N) to O(1). Only the
     /// rare cases (first add, or `dynamic_id` re-added after a previous
     /// unsubscription) fall back to the full scan + push.
-    pub(crate) fn add_dependent(&self, dynamic_id: usize) {
-        let Some(inner) = Self::slab_mut().get_mut::<T>(self.get_inner()) else {
-            return;
-        };
+    fn push_dependent(inner: &mut SignalInner<T>, dynamic_id: usize) {
         let deps: &mut Vec<usize> = inner.get_mut_dependents();
         if let Some(last) = deps.last() {
             if *last == dynamic_id {
@@ -305,15 +301,22 @@ where
         }
     }
 
-    /// Returns the list of dependent dynamic node IDs for this signal.
+    /// Takes the dependent dynamic node ID list out of the slot, leaving an
+    /// empty list behind.
+    ///
+    /// Move semantics are sound here because every dependent re-registers
+    /// itself via `get` / `with` when its dynamic node re-renders, and the
+    /// dirty marking of the taken IDs has already happened by the time the
+    /// list is drained (see `set`). Stale IDs of unmounted nodes are dropped
+    /// instead of accumulating in the slot.
     ///
     /// # Returns
     ///
-    /// - `Vec<usize>` - Clone of the dependents list.
-    pub(crate) fn get_dependents(&self) -> Vec<usize> {
+    /// - `Vec<usize>` - The drained dependents list.
+    pub(crate) fn take_dependents(&self) -> Vec<usize> {
         Self::slab_mut()
             .get_mut::<T>(self.get_inner())
-            .map(|inner: &mut SignalInner<T>| inner.get_dependents().clone())
+            .map(|inner: &mut SignalInner<T>| take(inner.get_mut_dependents()))
             .unwrap_or_default()
     }
 
@@ -332,7 +335,7 @@ where
     /// - `T: Clone + PartialEq + 'static` - The new value to assign to the signal.
     pub fn set(&self, value: T) {
         if self.update(value) {
-            let dependents: Vec<usize> = self.get_dependents();
+            let dependents: Vec<usize> = self.take_dependents();
             App::schedule_update(&dependents);
         }
     }

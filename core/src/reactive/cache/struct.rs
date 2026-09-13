@@ -8,8 +8,10 @@ use super::*;
 /// the recency so the just-read entry becomes the most-
 /// recently-used.
 ///
-/// All operations are O(1) amortized (`put`, `get`,
-/// `remove`, `contains`) except `iter`, which is O(n).
+/// `peek` and `contains` are O(1). `put`, `get`, and
+/// `remove` are O(n) in the number of cached entries
+/// because promoting or dropping a key scans the
+/// recency deque (`VecDeque::retain`); `iter` is O(n).
 ///
 /// # Capacity edge cases
 ///
