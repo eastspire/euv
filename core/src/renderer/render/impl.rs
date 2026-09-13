@@ -388,7 +388,31 @@ impl Renderer {
                         .find(|a: &&AttributeEntry| a.get_name().as_ref() == new_name)
                         .map(|a: &AttributeEntry| a.get_value());
                     let should_set: bool = match old_value {
-                        Some(old_val) => old_val != new_attr.get_value(),
+                        Some(old_val) => {
+                            // Same-signal attributes: the mount-time binding
+                            // (`bind_signal_to_element`) owns the DOM value and
+                            // rewrites it synchronously on every `set()`, so a
+                            // patch-time rewrite is pure redundancy (one
+                            // `signal.get()` clone, two `String` allocations
+                            // into the batch vec, and one batched JS write per
+                            // parent render). The `PartialEq` arm deliberately
+                            // reports same-slot pairs as unequal so the
+                            // fast-path probe does not mask value changes;
+                            // binding liveness — established at mount and held
+                            // until unmount via `BINDING_CLEANUPS` — is what
+                            // makes skipping the write sound here.
+                            match (old_val, new_attr.get_value()) {
+                                (
+                                    AttributeValue::Signal(old_sig),
+                                    AttributeValue::Signal(new_sig),
+                                ) if old_sig.get_inner() == new_sig.get_inner() => false,
+                                (
+                                    AttributeValue::BoolSignal(old_sig),
+                                    AttributeValue::BoolSignal(new_sig),
+                                ) if old_sig.get_inner() == new_sig.get_inner() => false,
+                                _ => old_val != new_attr.get_value(),
+                            }
+                        }
                         None => true,
                     };
                     if should_set {
