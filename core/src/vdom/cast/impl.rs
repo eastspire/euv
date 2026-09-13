@@ -252,9 +252,9 @@ where
         let source: Signal<T> = *self;
         let binder: Rc<dyn Fn(&Text)> = Rc::new(move |text: &Text| {
             let text_node: Text = text.clone();
-            let subscription_id: Rc<Cell<u64>> = Rc::new(Cell::new(u64::MAX));
-            let listener_id: Rc<Cell<u64>> = subscription_id.clone();
-            let id: u64 = source.subscribe(move || {
+            let subscription_id: Rc<Cell<usize>> = Rc::new(Cell::new(usize::MAX));
+            let listener_id: Rc<Cell<usize>> = subscription_id.clone();
+            let id: usize = source.subscribe(move || {
                 if !text_node.is_connected() {
                     source.unsubscribe(listener_id.get());
                     return;
