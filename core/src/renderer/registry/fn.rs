@@ -16,6 +16,10 @@ use super::*;
 /// `max_depth` caps the ancestor walk; passing `0` (per the call-site
 /// convention in `dispatch_delegated_event`) means "walk until `<html>`".
 ///
+/// The result is a `Float64Array` (ids are `< 2^53`, so the f64 channel is
+/// exact) so the caller drains the whole chain with **one** `copy_to`
+/// crossing instead of one `Array.get` per marked ancestor.
+///
 /// # Arguments
 ///
 /// - `event: &JsValue` - The DOM event whose target chain should be walked.
@@ -23,7 +27,7 @@ use super::*;
 ///
 /// # Returns
 ///
-/// - `Array` - The parsed `data-euv-id` values in walk order.
+/// - `Float64Array` - The parsed `data-euv-id` values in walk order.
 #[wasm_bindgen(inline_js = r#"
 export function euv_event_collect_id_chain(event, max_depth) {
     const ids = [];
@@ -51,9 +55,9 @@ export function euv_event_collect_id_chain(event, max_depth) {
         node = node.parentElement;
         depth += 1;
     }
-    return ids;
+    return Float64Array.from(ids);
 }
 "#)]
 extern "C" {
-    pub(crate) fn euv_event_collect_id_chain(event: &JsValue, max_depth: usize) -> Array;
+    pub(crate) fn euv_event_collect_id_chain(event: &JsValue, max_depth: usize) -> Float64Array;
 }

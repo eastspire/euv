@@ -452,3 +452,52 @@ pub(crate) fn compute_child_ops_plan<'a>(
     }
     plan
 }
+
+/// Collects the `data-euv-id` / `data-euv-dynamic-id` marker pairs of an
+/// entire DOM subtree in a single JS-side walk.
+///
+/// This replaces the previous Rust-side recursion in `cleanup_subtree`
+/// that paid 2 `get_attribute` + 1 `child_nodes` + 1 `NodeList.get`
+/// per child — roughly `3E + C` JS crossings for an E-element subtree —
+/// with **one** WASM→JS call plus one `Float64Array::copy_to`. The
+/// iterative DFS is pre-order (parent before descendants), matching the
+/// old recursion's visit order so registry teardown sequencing is
+/// unchanged.
+///
+/// The returned array is flat `[euv_id, dynamic_id, euv_id, ...]` pairs;
+/// a missing marker is encoded as `NaN` (ids are `< 2^53`, so the f64
+/// channel is exact).
+///
+/// # Arguments
+///
+/// - `&Element` - The subtree root element.
+///
+/// # Returns
+///
+/// - `Float64Array` - The flat marker pairs in pre-order.
+#[wasm_bindgen(inline_js = r#"
+export function euv_collect_subtree_ids(root) {
+    const out = [];
+    const stack = [root];
+    while (stack.length > 0) {
+        const node = stack.pop();
+        if (!node || node.nodeType !== 1) {
+            continue;
+        }
+        const euv = node.getAttribute("data-euv-id");
+        const dynamicId = node.getAttribute("data-euv-dynamic-id");
+        const euvParsed = euv === null ? NaN : parseInt(euv, 10);
+        const dynamicParsed = dynamicId === null ? NaN : parseInt(dynamicId, 10);
+        out.push(isNaN(euvParsed) ? NaN : euvParsed);
+        out.push(isNaN(dynamicParsed) ? NaN : dynamicParsed);
+        const children = node.children;
+        for (let i = children.length - 1; i >= 0; i--) {
+            stack.push(children[i]);
+        }
+    }
+    return Float64Array.from(out);
+}
+"#)]
+extern "C" {
+    pub(crate) fn euv_collect_subtree_ids(root: &Element) -> Float64Array;
+}

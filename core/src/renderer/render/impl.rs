@@ -528,6 +528,14 @@ impl Renderer {
                             AttributeValue::Ref(node_ref) => {
                                 let element_value: JsValue = element.clone().into();
                                 node_ref.set(element_value);
+                                // Mirror the mount path: register the shared
+                                // cell so `cleanup_subtree` resets the ref to
+                                // `None` on unmount. Without this a `ref:`
+                                // attribute introduced by a later patch (or a
+                                // swapped NodeRef identity) stayed stale after
+                                // the element left the DOM.
+                                let euv_id: usize = element.ensure_euv_id();
+                                Registry::register_noderef(euv_id, node_ref.share_cell());
                             }
                         }
                     }
@@ -733,7 +741,10 @@ impl Renderer {
         for (index, old_child) in old_children.iter().enumerate() {
             if old_child.key().is_none() {
                 let dom_index: u32 = index as u32;
-                if dom_index < child_nodes.length()
+                // OPT: `dom_child_count` was hoisted above; re-querying
+                // `child_nodes.length()` here is one extra JS crossing
+                // per unkeyed old child.
+                if dom_index < dom_child_count
                     && let Some(dom_node) = child_nodes.get(dom_index)
                 {
                     if let Some(element) = dom_node.dyn_ref::<Element>() {
@@ -758,17 +769,15 @@ impl Renderer {
         for op in plan.iter() {
             match op {
                 ChildOpPlan::Keep { new_index } | ChildOpPlan::MoveBefore { new_index, .. } => {
-                    let key_owned: String = match new_children.get(*new_index) {
-                        Some(new_child) => match new_child.key() {
-                            Some(k) => (*k).to_string(),
-                            None => continue,
-                        },
+                    // The map is keyed by `&str`, so the key borrow is
+                    // enough — no per-op `String` allocation.
+                    let key: &str = match new_children.get(*new_index).and_then(|c| c.key()) {
+                        Some(key) => key,
                         None => continue,
                     };
-                    if let Some((_, dom_node)) = old_key_to_node.get(key_owned.as_str()) {
+                    if let Some((_, dom_node)) = old_key_to_node.get(key) {
                         emitted[*new_index] = Some(dom_node.clone());
                     }
-                    drop(key_owned);
                 }
                 ChildOpPlan::InsertBefore { new_index, .. } => {
                     if let Some(new_child) = new_children.get(*new_index) {
@@ -799,20 +808,21 @@ impl Renderer {
                 Some(child) => child,
                 None => continue,
             };
-            let key_owned: String = match new_child.key() {
-                Some(key) => (*key).to_string(),
+            // The map is keyed by `&str`, so the key borrow is enough —
+            // no per-op `String` allocation. Keep borrows the entry;
+            // MoveBefore removes it so a duplicated key cannot be
+            // consumed twice.
+            let key: &str = match new_child.key() {
+                Some(key) => key,
                 None => continue,
             };
-            // Keep borrows the entry; MoveBefore removes it so a
-            // duplicated key cannot be consumed twice.
             let looked_up: Option<(usize, Node)> = if is_move {
-                old_key_to_node.remove(key_owned.as_str())
+                old_key_to_node.remove(key)
             } else {
                 old_key_to_node
-                    .get(key_owned.as_str())
+                    .get(key)
                     .map(|entry: &(usize, Node)| (entry.0, entry.1.clone()))
             };
-            drop(key_owned);
             let Some((old_vnode_index, dom_node)) = looked_up else {
                 continue;
             };
@@ -1492,33 +1502,34 @@ impl Renderer {
     /// Removes event handlers, dynamic node listeners, and signal listeners
     /// for the given element and all of its descendants.
     ///
+    /// The subtree's `data-euv-id` / `data-euv-dynamic-id` markers are
+    /// collected in a single JS-side walk (`euv_collect_subtree_ids`, 2
+    /// crossings total) instead of the previous Rust-side recursion (2
+    /// `get_attribute` + `child_nodes` + per-child `NodeList.get` per
+    /// element). Registry teardown order is unchanged: the walk is
+    /// pre-order, parent before descendants.
+    ///
     /// # Arguments
     ///
     /// - `&Element` - The DOM element to clean up.
     fn cleanup_subtree(element: &Element) {
-        if let Some(euv_id_str) = element.get_attribute(DATA_EUV_ID)
-            && let Ok(euv_id) = euv_id_str.parse::<usize>()
-        {
-            Registry::cleanup_element(euv_id);
-            Registry::cleanup_noderefs(euv_id);
-            if let Some(cleanups) = Registry::take_binding_cleanups(euv_id) {
-                for cleanup in cleanups {
-                    cleanup();
+        let raw: Float64Array = euv_collect_subtree_ids(element);
+        let mut ids: Vec<f64> = vec![0.0; raw.length() as usize];
+        raw.copy_to(&mut ids);
+        for pair in ids.chunks_exact(2) {
+            let (euv_id_raw, dynamic_id_raw): (f64, f64) = (pair[0], pair[1]);
+            if !euv_id_raw.is_nan() {
+                let euv_id: usize = euv_id_raw as usize;
+                Registry::cleanup_element(euv_id);
+                Registry::cleanup_noderefs(euv_id);
+                if let Some(cleanups) = Registry::take_binding_cleanups(euv_id) {
+                    for cleanup in cleanups {
+                        cleanup();
+                    }
                 }
             }
-        }
-        if let Some(dynamic_id_str) = element.get_attribute(DATA_EUV_DYNAMIC_ID)
-            && let Ok(dynamic_id) = dynamic_id_str.parse::<usize>()
-        {
-            Registry::cleanup_dynamic_node(dynamic_id);
-        }
-        let child_nodes: NodeList = element.child_nodes();
-        let length: u32 = child_nodes.length();
-        for child_index in 0..length {
-            if let Some(child) = child_nodes.get(child_index)
-                && let Some(child_element) = child.dyn_ref::<Element>()
-            {
-                Self::cleanup_subtree(child_element);
+            if !dynamic_id_raw.is_nan() {
+                Registry::cleanup_dynamic_node(dynamic_id_raw as usize);
             }
         }
     }

@@ -209,14 +209,13 @@ impl Registry {
         // handler. The underlying DOM `Event` is reference-counted by
         // wasm-bindgen so the clone is cheap.
         let event_value: JsValue = event.clone().into();
-        let id_chain: Array = euv_event_collect_id_chain(&event_value, max_depth);
-        let chain_len: u32 = id_chain.length();
-        for chain_index in 0..chain_len {
-            let id_value: JsValue = id_chain.get(chain_index);
-            let Some(euv_id_f64) = id_value.as_f64() else {
-                continue;
-            };
-            let euv_id: usize = euv_id_f64 as usize;
+        let id_chain: Float64Array = euv_event_collect_id_chain(&event_value, max_depth);
+        // One bulk copy for the whole chain instead of one `Array.get`
+        // crossing per marked ancestor (ids are `< 2^53`, exact in f64).
+        let mut chain: Vec<f64> = vec![0.0; id_chain.length() as usize];
+        id_chain.copy_to(&mut chain);
+        for id_value in chain.iter() {
+            let euv_id: usize = *id_value as usize;
             // Scoped lookup: clone the handler out of the live registry
             // and drop the registry borrow BEFORE invoking. Handlers
             // routinely re-render and thereby mutate the registry, so the
