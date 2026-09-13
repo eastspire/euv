@@ -270,10 +270,13 @@ impl AttributeValue {
 /// Visual equality comparison for attribute values.
 ///
 /// Compares values by their visual output rather than identity. `Signal`
-/// values are compared by their current resolved string; when both signals
-/// share the same inner pointer, they are always considered **unequal**
-/// because the signal may have mutated between VDOM snapshots and `.get()`
-/// would return the same current value for both, masking the change.
+/// values are compared by their current resolved string (borrow-compared
+/// via `Signal::with`, no `String` clones); when both signals share the
+/// same slab slot, they are always considered **unequal** — the patch walk
+/// recognises that case separately and skips the DOM write because the
+/// mount-time signal binding already owns the attribute's DOM value (see
+/// `patch_attributes`), while the unequal verdict keeps `visual_eq` from
+/// masking a value change between VDOM snapshots.
 /// `Event` values are always considered equal (re-binding is handled by the
 /// handler registry), and `Css` values are compared by class name.
 impl PartialEq for AttributeValue {
@@ -297,10 +300,16 @@ impl PartialEq for AttributeValue {
                 if old_signal.get_inner() == new_signal.get_inner() {
                     return false;
                 }
-                old_signal.get() == new_signal.get()
+                old_signal.with(|old_value: &String| {
+                    new_signal.with(|new_value: &String| old_value == new_value)
+                })
             }
-            (Self::Signal(old_signal), Self::Text(new_value)) => old_signal.get() == *new_value,
-            (Self::Text(old_value), Self::Signal(new_signal)) => *old_value == new_signal.get(),
+            (Self::Signal(old_signal), Self::Text(new_value)) => {
+                old_signal.with(|old_value: &String| old_value == new_value)
+            }
+            (Self::Text(old_value), Self::Signal(new_signal)) => {
+                new_signal.with(|new_value: &String| old_value == new_value)
+            }
             (Self::BoolSignal(old_signal), Self::BoolSignal(new_signal)) => {
                 if old_signal.get_inner() == new_signal.get_inner() {
                     return false;

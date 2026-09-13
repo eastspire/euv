@@ -575,10 +575,9 @@ impl Registry {
         let closure: Closure<dyn FnMut()> = Closure::wrap(Box::new(move || {
             // OPT 15: in-place iterate the registered handler list instead
             // of `collect()`-ing the IDs into a Vec and then re-doing a
-            // HashMap lookup per ID. `to_owned` clones the string once so
-            // the closure does not borrow from the caller's `&str`.
-            let event_name_for_iter: String = event_name_owned.clone();
-            if let Some(handlers) = Self::get_window_registry().get(&event_name_for_iter) {
+            // HashMap lookup per ID. The event name is owned by the closure
+            // (a `&str` lookup key borrows it — no per-event `String` clone).
+            if let Some(handlers) = Self::get_window_registry().get(event_name_owned.as_str()) {
                 for (_handler_id, callback_ptr) in handlers.iter() {
                     let callback: &mut Box<dyn FnMut() + 'static> = unsafe { &mut **callback_ptr };
                     callback();
