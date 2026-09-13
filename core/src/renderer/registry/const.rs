@@ -61,8 +61,9 @@ pub(crate) const NON_BUBBLING_EVENTS: [&str; 35] = [
     "volumechange",
     "waiting",
 ];
-/// Event names that fire at very high frequency (mousemove, touchmove,
-/// pointermove, scroll, wheel, dragover). For these events the
+/// Event names that fire at very high frequency (mousemove, mousewheel,
+/// pointermove, touchmove, wheel — see the array below). For these events
+/// the
 /// `dispatch_delegated_event` ancestor walk is capped at
 /// `MAX_ANCESTOR_DEPTH_FOR_HIGH_FREQ` levels instead of walking all the
 /// way to `<html>`, because:

@@ -6,7 +6,6 @@ use super::*;
 /// can locate and manage the dynamic content during re-renders and cleanup.
 pub(crate) const DATA_EUV_DYNAMIC_ID: &str = "data-euv-dynamic-id";
 
-/// CSS selector that matches every element participating in framework
 /// The HTML tag name used for fragment placeholder elements.
 ///
 /// Fragments are rendered as `<slot>` elements with `display:contents` style
