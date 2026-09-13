@@ -235,11 +235,15 @@ where
     /// The returned `TextNode` carries a binder closure instead of an
     /// intermediate bridge signal. The binder runs exactly once per DOM text
     /// node at materialization time: it subscribes the source signal directly
-    /// to that node (converting `T` to `String` on every change), guarded by
-    /// `is_connected` so writes stop once the node leaves the document. No
-    /// per-render bridge allocation and no subscription churn: a kept text
-    /// node keeps its single subscription across any number of re-renders of
-    /// its parent.
+    /// to that node (converting `T` to `String` on every change). The
+    /// listener self-unsubscribes the first time it observes the node as
+    /// detached — a removed text node never comes back (patch materialises
+    /// a fresh `Text` per mount), so without self-unsubscribe the listener
+    /// would live on the source signal's list forever and pay one
+    /// `is_connected` crossing per set per dead node. Mid-notification
+    /// unsubscribe is deferred through `removed_listener_ids`, so the
+    /// self-removal is re-entrancy-safe. A kept text node keeps its single
+    /// subscription across any number of re-renders of its parent.
     ///
     /// # Returns
     ///
@@ -248,16 +252,20 @@ where
         let source: Signal<T> = *self;
         let binder: Rc<dyn Fn(&Text)> = Rc::new(move |text: &Text| {
             let text_node: Text = text.clone();
-            source.subscribe(move || {
+            let subscription_id: Rc<Cell<u64>> = Rc::new(Cell::new(u64::MAX));
+            let listener_id: Rc<Cell<u64>> = subscription_id.clone();
+            let id: u64 = source.subscribe(move || {
                 if !text_node.is_connected() {
+                    source.unsubscribe(listener_id.get());
                     return;
                 }
-                let value: String = source.get().to_string();
+                let value: String = source.with(|current: &T| current.to_string());
                 text_node.set_text_content(Some(&value));
             });
+            subscription_id.set(id);
         });
         VirtualNode::Text(TextNode::new(
-            Cow::Owned(source.get().to_string()),
+            Cow::Owned(source.with(|current: &T| current.to_string())),
             Some(binder),
         ))
     }

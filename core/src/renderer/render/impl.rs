@@ -1238,21 +1238,24 @@ impl Renderer {
         let placeholder_clone: Element = placeholder.clone();
         let mut renderer_for_sub: Self = Self::new(placeholder_clone.clone());
         renderer_for_sub.set_current_tree(Some(initial_unwrapped));
-        // Wrap heap allocations in OwnedPtr so they are freed when the closure drops.
-        let renderer_owned: OwnedPtr<Renderer> =
-            OwnedPtr::new(Box::into_raw(Box::new(renderer_for_sub)));
+        // Wrap the heap state in a single OwnedPtr so it is freed when the
+        // closure drops (one Box for renderer + last-arm, was two).
         let initial_arm: usize = hook_context
             .get_inner()
             .try_borrow()
             .map(|inner: Ref<HookContextInner>| inner.get_arm_changed())
             .unwrap_or_default();
-        let last_arm_owned: OwnedPtr<usize> = OwnedPtr::new(Box::into_raw(Box::new(initial_arm)));
+        let state_owned: OwnedPtr<DynamicRenderState> =
+            OwnedPtr::new(Box::into_raw(Box::new(DynamicRenderState {
+                renderer: renderer_for_sub,
+                last_arm: initial_arm,
+            })));
         let callback: Box<dyn FnMut()> = Box::new(move || {
             if placeholder_clone.parent_node().is_none() {
                 return;
             }
             hook_context.reset_index();
-            let prev_arm: usize = unsafe { *last_arm_owned.get() };
+            let prev_arm: usize = unsafe { (*state_owned.get()).last_arm };
             CURRENT_TRACKING_DYNAMIC_ID.store(dynamic_id, Ordering::Relaxed);
             let new_vnode: VirtualNode = HookContext::with(hook_context.clone(), || {
                 let inner: &mut RenderFnInner = unsafe { &mut *render_fn_rc.get() };
@@ -1265,23 +1268,23 @@ impl Renderer {
                 .unwrap_or_default();
             let arm_switched: bool = prev_arm != current_arm;
             unsafe {
-                *last_arm_owned.get() = current_arm;
+                (*state_owned.get()).last_arm = current_arm;
             }
             if skip_equal && !arm_switched {
-                let renderer_ref: &Renderer = unsafe { &*renderer_owned.get() };
+                let renderer_ref: &Renderer = unsafe { &(*state_owned.get()).renderer };
                 if let Some(old_vnode) = renderer_ref.try_get_current_tree() {
                     let new_unwrapped: VirtualNode = Self::unwrap_component_owned(new_vnode);
                     if Self::visual_eq(old_vnode, &new_unwrapped) {
                         CURRENT_TRACKING_DYNAMIC_ID.store(usize::MAX, Ordering::Relaxed);
                         return;
                     }
-                    let renderer_mut: &mut Renderer = unsafe { &mut *renderer_owned.get() };
+                    let renderer_mut: &mut Renderer = unsafe { &mut (*state_owned.get()).renderer };
                     renderer_mut.render(new_unwrapped);
                     CURRENT_TRACKING_DYNAMIC_ID.store(usize::MAX, Ordering::Relaxed);
                     return;
                 }
             }
-            let renderer_mut: &mut Renderer = unsafe { &mut *renderer_owned.get() };
+            let renderer_mut: &mut Renderer = unsafe { &mut (*state_owned.get()).renderer };
             if arm_switched {
                 renderer_mut.render_full_replace(new_vnode);
             } else {

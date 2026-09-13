@@ -24,15 +24,18 @@ where
     T: Clone + PartialEq + Display + 'static,
     F: Fn(&Element, &str) + 'static,
 {
-    let initial_value: String = signal.get().to_string();
+    let initial_value: String = signal.with(|value: &T| value.to_string());
     write(element, &initial_value);
     let euv_id: usize = element.ensure_euv_id();
     let element_clone: Element = element.clone();
     let subscription_id: u64 = signal.subscribe(move || {
-        if !element_clone.is_connected() {
-            return;
-        }
-        let new_value: String = signal.get().to_string();
+        // No `is_connected` guard: the binding is torn down synchronously
+        // by `cleanup_subtree` (via `take_binding_cleanups`) before the
+        // element leaves the DOM, so a stale fire is impossible — and for
+        // detached but kept-alive subtrees the write is intentional.
+        // Dropping the check saves one JS crossing per set, and `with`
+        // saves the extra `T` clone that `get().to_string()` paid.
+        let new_value: String = signal.with(|value: &T| value.to_string());
         write(&element_clone, &new_value);
     });
     Registry::push_binding_cleanup(

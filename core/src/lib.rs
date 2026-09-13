@@ -27,7 +27,7 @@ pub(crate) use renderer::*;
 
 use std::{
     any::Any,
-    cell::{Ref, RefCell, UnsafeCell},
+    cell::{Cell, Ref, RefCell, UnsafeCell},
     iter::Iterator,
     num::ParseIntError,
     ops::Deref,

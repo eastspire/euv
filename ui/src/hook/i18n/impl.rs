@@ -137,23 +137,29 @@ impl I18n {
     ///
     /// - `String` - A `String` value.
     pub fn t(&self, key: &str) -> String {
-        let active: String = self.get_locale().get();
-        let fallback: String = self.get_fallback_locale().get();
-        let guard: std::sync::RwLockReadGuard<'static, HashMap<String, HashMap<String, String>>> =
-            messages_lock().read().unwrap_or_else(|e| e.into_inner());
-        if let Some(message) = guard
-            .get(&active)
-            .and_then(|m: &HashMap<String, String>| m.get(key))
-        {
-            return message.clone();
-        }
-        if let Some(message) = guard
-            .get(&fallback)
-            .and_then(|m: &HashMap<String, String>| m.get(key))
-        {
-            return message.clone();
-        }
-        key.to_string()
+        // Borrow both locale signals via `Signal::with` instead of paying
+        // two `String` clones per call (per `t()` per render).
+        self.get_locale().with(|active: &String| {
+            self.get_fallback_locale().with(|fallback: &String| {
+                let guard: std::sync::RwLockReadGuard<
+                    'static,
+                    HashMap<String, HashMap<String, String>>,
+                > = messages_lock().read().unwrap_or_else(|e| e.into_inner());
+                if let Some(message) = guard
+                    .get(active.as_str())
+                    .and_then(|m: &HashMap<String, String>| m.get(key))
+                {
+                    return message.clone();
+                }
+                if let Some(message) = guard
+                    .get(fallback.as_str())
+                    .and_then(|m: &HashMap<String, String>| m.get(key))
+                {
+                    return message.clone();
+                }
+                key.to_string()
+            })
+        })
     }
 
     /// Translates `key` and substitutes `{name}`-style
@@ -205,13 +211,16 @@ impl I18n {
     ///
     /// - `usize` - Count of currently-registered messages.
     pub fn active_message_count(&self) -> usize {
-        let active: String = self.get_locale().get();
-        let guard: std::sync::RwLockReadGuard<'static, HashMap<String, HashMap<String, String>>> =
-            messages_lock().read().unwrap_or_else(|e| e.into_inner());
-        guard
-            .get(&active)
-            .map(|m: &HashMap<String, String>| m.len())
-            .unwrap_or_default()
+        self.get_locale().with(|active: &String| {
+            let guard: std::sync::RwLockReadGuard<
+                'static,
+                HashMap<String, HashMap<String, String>>,
+            > = messages_lock().read().unwrap_or_else(|e| e.into_inner());
+            guard
+                .get(active.as_str())
+                .map(|m: &HashMap<String, String>| m.len())
+                .unwrap_or_default()
+        })
     }
 }
 
