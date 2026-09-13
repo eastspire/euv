@@ -1037,6 +1037,16 @@ class! {
         font-size: var!(font-base);
     }
 
+    pub c_counter_value_row {
+        display: "flex";
+        align-items: "center";
+        gap: var!(gap-element);
+        min-height: var!(min-height-base);
+        padding: format!("0px {}", var!(space-lg));
+        word-break: "break-all";
+        overflow-wrap: "anywhere";
+    }
+
     pub c_badge_row {
         display: "flex";
         gap: var!(gap-inline);
