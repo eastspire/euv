@@ -43,3 +43,16 @@ pub(crate) struct Renderer {
 /// to a real DOM element selected by a CSS selector.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) struct Mount;
+
+/// Heap state shared by a dynamic node's re-render callback.
+///
+/// Bundling the sub-renderer and the last-seen arm index into a single
+/// allocation saves one `Box` per dynamic-node mount compared to boxing
+/// each separately.
+#[derive(Debug)]
+pub(crate) struct DynamicRenderState {
+    /// The sub-renderer owning the dynamic node's current tree.
+    pub(crate) renderer: Renderer,
+    /// The arm index observed after the previous render.
+    pub(crate) last_arm: usize,
+}

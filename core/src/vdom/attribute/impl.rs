@@ -118,12 +118,12 @@ impl AttributeValue {
 
     /// Joins class attribute values into a single space-separated string.
     ///
-    /// OPT-20: builds the result in a single `String::with_capacity`
-    /// allocation, avoiding the intermediate `Vec<String>` plus `join(" ")`
-    /// round-trip of the previous implementation. Iterates the input
-    /// values by reference and clones only the segments that survive
-    /// the filter (skipping `_ => None` arms and empty `Text` strings),
-    /// so the per-class render allocation drops from `N + 2` to `1`.
+    /// OPT-20: builds the result in a single `String` (amortized growth,
+    /// no intermediate `Vec<String>` + `join(" ")` round-trip), iterating
+    /// the input values by reference and cloning only the segments that
+    /// survive the filter (skipping `_ => None` arms and empty `Text`
+    /// strings), so the per-class render allocation drops from `N + 2`
+    /// to `1`.
     ///
     /// OPT-11: both `Css` and `CssRef` arms inject the style on first
     /// reference. Without the `CssRef` arm the ref would fall through
@@ -205,11 +205,11 @@ impl AttributeValue {
 
     /// Joins style attribute values into a single space-separated string.
     ///
-    /// OPT-20: same single-allocation approach as `join_class_segments`,
-    /// specialised to the `Text` + `Signal` cases that style merging uses.
-    /// Avoids the intermediate `Vec<String>` plus `join(" ")` round-trip of
-    /// the previous implementation, dropping per-render allocation count
-    /// from `N + 2` to `1`.
+    /// OPT-20: same single-`String` approach as `join_class_segments`
+    /// (amortized growth), specialised to the `Text` + `Signal` cases that
+    /// style merging uses. Avoids the intermediate `Vec<String>` plus
+    /// `join(" ")` round-trip of the previous implementation, dropping
+    /// per-render allocation count from `N + 2` to `1`.
     fn join_style_segments(values: &[Self]) -> String {
         let mut joined: String = String::new();
         for value in values.iter() {
@@ -702,17 +702,25 @@ impl Css {
         K: AsRef<str>,
         V: AsRef<str>,
     {
-        props
+        // Single pre-sized `String` instead of per-prop `format!` +
+        // intermediate `Vec<String>` + `join` (was N + 2 allocations).
+        let total_len: usize = props
             .iter()
             .map(|(key, value): &(K, V)| {
-                format!(
-                    "{}{CSS_PROP_SEPARATOR}{}{CHAR_CSS_DECL_TERMINATOR}",
-                    key.as_ref(),
-                    value.as_ref()
-                )
+                key.as_ref().len() + CSS_PROP_SEPARATOR.len() + value.as_ref().len() + 2
             })
-            .collect::<Vec<String>>()
-            .join(CHAR_SPACE)
+            .sum();
+        let mut out: String = String::with_capacity(total_len);
+        for (index, (key, value)) in props.iter().enumerate() {
+            if index > 0 {
+                out.push_str(CHAR_SPACE);
+            }
+            out.push_str(key.as_ref());
+            out.push_str(CSS_PROP_SEPARATOR);
+            out.push_str(value.as_ref());
+            out.push(CHAR_CSS_DECL_TERMINATOR);
+        }
+        out
     }
 
     /// Builds a stable suffix for a class name from a dynamic parameter value.
@@ -750,13 +758,24 @@ impl Css {
     ///
     /// - `String` - The CSS string (e.g., `"margin: 0 auto; max-width: 800px;"`).
     pub fn style_string_owned(props: &[(String, String)]) -> String {
-        props
+        // Single pre-sized `String` (same shape as `style_string`).
+        let total_len: usize = props
             .iter()
             .map(|(key, value): &(String, String)| {
-                format!("{key}{CSS_PROP_SEPARATOR}{value}{CHAR_CSS_DECL_TERMINATOR}")
+                key.len() + CSS_PROP_SEPARATOR.len() + value.len() + 2
             })
-            .collect::<Vec<String>>()
-            .join(CHAR_SPACE)
+            .sum();
+        let mut out: String = String::with_capacity(total_len);
+        for (index, (key, value)) in props.iter().enumerate() {
+            if index > 0 {
+                out.push_str(CHAR_SPACE);
+            }
+            out.push_str(key);
+            out.push_str(CSS_PROP_SEPARATOR);
+            out.push_str(value);
+            out.push(CHAR_CSS_DECL_TERMINATOR);
+        }
+        out
     }
 
     /// Injects CSS text into the shared `<style>` element in the DOM.
