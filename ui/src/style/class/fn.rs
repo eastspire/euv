@@ -1038,14 +1038,12 @@ class! {
     }
 
     pub c_counter_value_row {
-        padding-left: format!("calc(1px + {})", var!(space-lg));
-        padding-right: format!("calc(1px + {})", var!(space-lg));
         margin-top: var!(space-sm);
         word-break: "break-all";
         overflow-wrap: "anywhere";
         font-size: var!(font-base);
         color: "inherit";
-        font-weight: "500";
+        font-weight: "400";
     }
 
     pub c_badge_row {
