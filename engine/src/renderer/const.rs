@@ -695,18 +695,6 @@ pub(crate) const WEBGPU_PROPERTY_HEIGHT: &str = "height";
 /// `depthOrArrayLayers` property key inside `GpuExtent3D`.
 pub(crate) const WEBGPU_PROPERTY_DEPTH_OR_1: &str = "depthOrArrayLayers";
 
-/// `x` property key (used by `GpuOrigin3D` and viewport / scissor).
-pub(crate) const WEBGPU_PROPERTY_X: &str = "x";
-
-/// `y` property key (used by `GpuOrigin3D` and viewport / scissor).
-pub(crate) const WEBGPU_PROPERTY_Y: &str = "y";
-
-/// `minDepth` property key inside `setViewport`.
-pub(crate) const WEBGPU_PROPERTY_MIN_DEPTH: &str = "minDepth";
-
-/// `maxDepth` property key inside `setViewport`.
-pub(crate) const WEBGPU_PROPERTY_MAX_DEPTH: &str = "maxDepth";
-
 /// Default `minDepth` value passed to `setViewport` when the caller did not
 /// supply one. WebGPU's spec default is `0.0`.
 pub(crate) const WEBGPU_DEFAULT_VIEWPORT_MIN_DEPTH: f64 = 0.0;
