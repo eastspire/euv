@@ -137,18 +137,18 @@ where
     ///
     /// # Returns
     ///
-    /// - `u64` - The subscription id. `u64::MAX` when the handle is stale
+    /// - `usize` - The subscription id. `usize::MAX` when the handle is stale
     ///   (out-of-bounds slot); such an id is a safe no-op for `unsubscribe`.
-    pub fn subscribe<F>(&self, callback: F) -> u64
+    pub fn subscribe<F>(&self, callback: F) -> usize
     where
         F: FnMut() + 'static,
     {
         let Some(inner) = Self::slab_mut().get_mut::<T>(self.get_inner()) else {
             // Stale handle: no slot to register against — the subscription
             // is silently dropped, matching the previous no-op semantics.
-            return u64::MAX;
+            return usize::MAX;
         };
-        let id: u64 = inner.get_next_listener_id();
+        let id: usize = inner.get_next_listener_id();
         inner.set_next_listener_id(id.wrapping_add(1));
         inner.get_mut_listeners().push((id, Box::new(callback)));
         id
@@ -163,8 +163,8 @@ where
     ///
     /// # Arguments
     ///
-    /// - `u64` - The subscription id returned by `subscribe`.
-    pub fn unsubscribe(&self, id: u64) {
+    /// - `usize` - The subscription id returned by `subscribe`.
+    pub fn unsubscribe(&self, id: usize) {
         let Some(inner) = Self::slab_mut().get_mut::<T>(self.get_inner()) else {
             return;
         };
@@ -174,7 +174,7 @@ where
         }
         inner
             .get_mut_listeners()
-            .retain(|(listener_id, _): &(u64, Box<dyn FnMut()>)| *listener_id != id);
+            .retain(|(listener_id, _): &ListenerEntry| *listener_id != id);
     }
 
     /// Detaches this signal from the reactive system without freeing memory.
@@ -237,7 +237,7 @@ where
         }
         inner.set_value(value);
         inner.set_notifying(true);
-        let mut listeners: Vec<(u64, Box<dyn FnMut()>)> = Vec::new();
+        let mut listeners: Vec<ListenerEntry> = Vec::new();
         swap(inner.get_mut_listeners(), &mut listeners);
         for (_id, listener) in listeners.iter_mut() {
             listener();
@@ -256,13 +256,11 @@ where
         if let Some(inner) = Self::slab_mut().get_mut::<T>(idx)
             && inner.get_alive()
         {
-            let removed: Vec<u64> = take(inner.get_mut_removed_listener_ids());
+            let removed: Vec<usize> = take(inner.get_mut_removed_listener_ids());
             if !removed.is_empty() {
-                listeners.retain(|(listener_id, _): &(u64, Box<dyn FnMut()>)| {
-                    !removed.contains(listener_id)
-                });
+                listeners.retain(|(listener_id, _): &ListenerEntry| !removed.contains(listener_id));
             }
-            let new_listeners: &mut Vec<(u64, Box<dyn FnMut()>)> = inner.get_mut_listeners();
+            let new_listeners: &mut Vec<ListenerEntry> = inner.get_mut_listeners();
             if new_listeners.is_empty() {
                 swap(new_listeners, &mut listeners);
             } else {

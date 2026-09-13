@@ -10,9 +10,6 @@ use super::*;
 pub(crate) trait AnySignalInner: Any {
     /// Returns `true` if this slot is still considered live (i.e. `alive`).
     fn alive(&self) -> bool;
-    /// Marks the slot as inactive. After this call `alive()` returns `false`
-    /// and the slot is reclaimable via [`Signal::deactivate`].
-    fn set_inactive(&mut self);
     /// Projects the slot as `&mut dyn Any` for downcasting.
     fn as_any_mut(&mut self) -> &mut dyn Any;
 }
@@ -31,10 +28,6 @@ where
 {
     fn alive(&self) -> bool {
         self.get_alive()
-    }
-
-    fn set_inactive(&mut self) {
-        self.set_alive(false);
     }
 
     fn as_any_mut(&mut self) -> &mut dyn Any {

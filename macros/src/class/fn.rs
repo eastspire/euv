@@ -1157,7 +1157,7 @@ pub(crate) fn emit_once_lock_fn(
 
 /// Generates a parameterized class function body that caches its result.
 ///
-/// Each call-site that has parameters gets its own `OnceLock<RefCell<HashMap>>`
+/// Each call-site that has parameters gets its own `OnceLock<Mutex<HashMap>>`
 /// keyed by `(macro_name, format!("{:?}", params))`. Cache hits skip the
 /// `Css::new` String allocations (name + style + selector + at-rule) and the
 /// `inject_style` `HashSet` lookup. The cache lives in the consumer's binary
@@ -1177,6 +1177,10 @@ pub(crate) fn emit_once_lock_fn(
 /// - `&proc_macro2::TokenStream` - Token stream producing the at-rule rules vector.
 /// - `&[proc_macro2::TokenStream]` - The parameter definitions (name: type).
 /// - `Option<&syn::Generics>` - The generic parameters and where clause.
+///
+/// The cache grows unboundedly when a parameter varies continuously (e.g.
+/// a percentage slider); parameterised classes are intended for a small
+/// discrete set of variants.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_param_css_cache_fn(
     tokens: &mut proc_macro2::TokenStream,
@@ -1209,12 +1213,20 @@ pub(crate) fn emit_param_css_cache_fn(
             let cache: &::std::sync::Mutex<::std::collections::HashMap<(String, String), ::euv::Css>> =
                 #const_name_token.get_or_init(|| ::std::sync::Mutex::new(::std::collections::HashMap::new()));
             let key: (String, String) = #key_expr;
-            if let Some(cached) = cache.lock().expect("PARAM_CSS_CACHE poisoned").get(&key) {
+            let mut cache_guard = match cache.lock() {
+                Ok(guard) => guard,
+                Err(_) => {
+                    let css: ::euv::Css = ::euv::Css::new(#unique_name_expr, #style_expr, #selector_expr, #at_rule_expr);
+                    css.inject_style();
+                    return css;
+                }
+            };
+            if let Some(cached) = cache_guard.get(&key) {
                 return cached.clone();
             }
             let css: ::euv::Css = ::euv::Css::new(#unique_name_expr, #style_expr, #selector_expr, #at_rule_expr);
             css.inject_style();
-            cache.lock().expect("PARAM_CSS_CACHE poisoned").insert(key, css.clone());
+            cache_guard.insert(key, css.clone());
             css
         }
     });

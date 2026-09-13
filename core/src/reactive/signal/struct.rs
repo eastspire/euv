@@ -1,5 +1,8 @@
 use super::*;
 
+/// A `(subscription_id, callback)` pair stored in a signal's listener list.
+pub(crate) type ListenerEntry = (usize, Box<dyn FnMut()>);
+
 /// Inner state of a signal, holding the value and subscribed listeners.
 ///
 /// This struct is not exposed directly; use `Signal` instead.
@@ -21,13 +24,13 @@ where
     #[get(pub(crate))]
     #[get_mut(pub(crate))]
     #[set(pub(crate))]
-    pub(crate) listeners: Vec<(u64, Box<dyn FnMut()>)>,
+    pub(crate) listeners: Vec<ListenerEntry>,
     /// Monotonic counter backing subscription ids for `listeners`.
     #[get(pub, type(copy))]
     #[get_mut(pub(crate))]
     #[set(pub(crate))]
     #[new(skip)]
-    pub(crate) next_listener_id: u64,
+    pub(crate) next_listener_id: usize,
     /// Ids detached via [`Signal::unsubscribe`] while `update` had the
     /// listener list swapped out. Drained by `update`'s merge-back pass so
     /// a listener detached mid-notification is not resurrected.
@@ -36,7 +39,7 @@ where
     #[get_mut(pub(crate))]
     #[set(pub(crate))]
     #[new(skip)]
-    pub(crate) removed_listener_ids: Vec<u64>,
+    pub(crate) removed_listener_ids: Vec<usize>,
     /// `true` while `update` has the listener list swapped out for
     /// notification. `unsubscribe` consults this flag to decide between
     /// direct removal and deferred removal via `removed_listener_ids`.

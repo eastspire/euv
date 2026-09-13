@@ -122,37 +122,6 @@ impl Console {
         }))
     }
 
-    /// Filters and reverses console log entries based on the current filter signal value.
-    ///
-    /// # Arguments
-    ///
-    /// - `Signal<Vec<ConsoleEntry>>` - The console log signal.
-    /// - `Signal<LogFilter>` - The current filter level signal.
-    ///
-    /// # Returns
-    ///
-    /// - `Vec<(usize, ConsoleEntry)>` - The filtered and reversed entries with original indices.
-    pub(crate) fn filter_entries(
-        logs: Signal<Vec<ConsoleEntry>>,
-        filter: Signal<LogFilter>,
-    ) -> Vec<(usize, ConsoleEntry)> {
-        let log_list: Vec<ConsoleEntry> = logs.get();
-        let filter_value: LogFilter = filter.get();
-        let mut result: Vec<(usize, ConsoleEntry)> = log_list
-            .iter()
-            .enumerate()
-            .filter(|(_, entry): &(usize, &ConsoleEntry)| match filter_value {
-                LogFilter::All => true,
-                LogFilter::Log => entry.get_level() == LogLevel::Log,
-                LogFilter::Warn => entry.get_level() == LogLevel::Warn,
-                LogFilter::Error => entry.get_level() == LogLevel::Error,
-            })
-            .map(|(index, entry): (usize, &ConsoleEntry)| (index, entry.clone()))
-            .collect();
-        result.reverse();
-        result
-    }
-
     /// Appends an entry to the vConsole log signal, trimming if over capacity.
     ///
     /// No-op when `Console::init` has not been called yet.

@@ -59,7 +59,14 @@ fn pagination_side(
             a {
                 class: c_euv_pagination_link()
                 class: c_euv_pagination_next()
-                href: format!("#{}", item.link)
+                href: {
+                    let mut
+                    href: String =
+                    String::with_capacity(ROUTE_HASH_PREFIX.len() + item.link.len());
+                    href.push_str(ROUTE_HASH_PREFIX);
+                    href.push_str(item.link);
+                    href
+                }
                 onclick: Router::link_handler(item.link)
                 span {
                     class: c_euv_pagination_label()
@@ -79,7 +86,14 @@ fn pagination_side(
     html! {
         a {
             class: c_euv_pagination_link()
-            href: format!("#{}", item.link)
+            href: {
+                let mut
+                href: String =
+                String::with_capacity(ROUTE_HASH_PREFIX.len() + item.link.len());
+                href.push_str(ROUTE_HASH_PREFIX);
+                href.push_str(item.link);
+                href
+            }
             onclick: Router::link_handler(item.link)
             span {
                 class: c_euv_pagination_label()

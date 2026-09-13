@@ -95,7 +95,14 @@ pub fn euv_hero_action(node: VirtualNode<EuvHeroActionProps>) -> VirtualNode {
                 class: {
                     button_class()
                 }
-                href: format!("#{}", action.link)
+                href: {
+                    let mut
+                    href: String =
+                    String::with_capacity(ROUTE_HASH_PREFIX.len() + action.link.len());
+                    href.push_str(ROUTE_HASH_PREFIX);
+                    href.push_str(action.link);
+                    href
+                }
                 onclick: Router::link_handler(action.link)
                 {
                     action.text
