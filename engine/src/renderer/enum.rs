@@ -394,3 +394,33 @@ pub enum BindGroupEntryType {
         comparison: bool,
     },
 }
+
+/// WebGPU receiver-class discriminator for the `cached_method` cache.
+///
+/// JS class methods live on the prototype, so the same `Function` instance
+/// is returned for every receiver of a given class — the `(class, method)`
+/// pair uniquely identifies the cached `Function` and no receiver identity
+/// is needed. This replaces the previous stack-address keying: per-frame
+/// temporary `JsValue`s (pass encoders, command encoders) reuse stack
+/// slots across frames, so an address-keyed cache could return the wrong
+/// class's `Function` when a `GPUComputePassEncoder` landed on a slot that
+/// previously held a `GPURenderPassEncoder` (both share `setPipeline` /
+/// `setBindGroup` / `end`), producing a swallowed TypeError and a silently
+/// skipped GPU call.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum GpuReceiverClass {
+    /// `GPUDevice` (immortal, renderer-owned).
+    Device,
+    /// `GPUQueue` (immortal, renderer-owned).
+    Queue,
+    /// `GPUCanvasContext` (immortal, renderer-owned).
+    Context,
+    /// `GPUTexture` (per-call temporary).
+    Texture,
+    /// `GPUCommandEncoder` (per-frame temporary).
+    CommandEncoder,
+    /// `GPURenderPassEncoder` (per-pass temporary).
+    RenderPass,
+    /// `GPUComputePassEncoder` (per-pass temporary).
+    ComputePass,
+}

@@ -2352,9 +2352,12 @@ impl WebGpuRenderer {
         // OPT 2b: cached `device.createCommandEncoder()` — `Function`
         // is the same prototype slot for the device's lifetime, so
         // skipping the `Reflect::get` shaves ~110ns per frame.
-        let create_fn: Function =
-            cached_method(self.get_device(), WEBGPU_METHOD_CREATE_COMMAND_ENCODER)
-                .unwrap_or_else(|_| JsValue::UNDEFINED.unchecked_into());
+        let create_fn: Function = cached_method(
+            GpuReceiverClass::Device,
+            self.get_device(),
+            WEBGPU_METHOD_CREATE_COMMAND_ENCODER,
+        )
+        .unwrap_or_else(|_| JsValue::UNDEFINED.unchecked_into());
         create_fn
             .call0(self.get_device())
             .unwrap_or(JsValue::UNDEFINED)
@@ -2374,14 +2377,21 @@ impl WebGpuRenderer {
         // resulting `texture.createView()`. Both methods live on
         // stable prototypes, so the `Function` reference is stable
         // for the receiver's lifetime.
-        let get_texture_fn: Function =
-            cached_method(self.get_context(), WEBGPU_METHOD_GET_CURRENT_TEXTURE)
-                .unwrap_or_else(|_| JsValue::UNDEFINED.unchecked_into());
+        let get_texture_fn: Function = cached_method(
+            GpuReceiverClass::Context,
+            self.get_context(),
+            WEBGPU_METHOD_GET_CURRENT_TEXTURE,
+        )
+        .unwrap_or_else(|_| JsValue::UNDEFINED.unchecked_into());
         let texture: JsValue = get_texture_fn
             .call0(self.get_context())
             .unwrap_or(JsValue::UNDEFINED);
-        let create_view_fn: Function = cached_method(&texture, WEBGPU_METHOD_CREATE_VIEW)
-            .unwrap_or_else(|_| JsValue::UNDEFINED.unchecked_into());
+        let create_view_fn: Function = cached_method(
+            GpuReceiverClass::Texture,
+            &texture,
+            WEBGPU_METHOD_CREATE_VIEW,
+        )
+        .unwrap_or_else(|_| JsValue::UNDEFINED.unchecked_into());
         create_view_fn.call0(&texture).unwrap_or(JsValue::UNDEFINED)
     }
 
@@ -2615,8 +2625,12 @@ impl WebGpuRenderer {
         // cache's lifetime (set once when the descriptor was built);
         // `view` / `resolveTarget` / `clearValue` are refreshed above
         // on every call.
-        let begin_fn: Function = cached_method(encoder, WEBGPU_METHOD_BEGIN_RENDER_PASS)
-            .unwrap_or_else(|_| JsValue::UNDEFINED.unchecked_into());
+        let begin_fn: Function = cached_method(
+            GpuReceiverClass::CommandEncoder,
+            encoder,
+            WEBGPU_METHOD_BEGIN_RENDER_PASS,
+        )
+        .unwrap_or_else(|_| JsValue::UNDEFINED.unchecked_into());
         begin_fn
             .call1(encoder, &cache.descriptor)
             .unwrap_or(JsValue::UNDEFINED)
@@ -2794,8 +2808,12 @@ impl WebGpuRenderer {
         }
         // OPT 2b: cached `queue.submit()` — `Function` is the same
         // prototype slot for the queue's lifetime.
-        let _: Result<JsValue, JsValue> =
-            cached_method_call(self.get_queue(), WEBGPU_METHOD_SUBMIT, &array);
+        let _: Result<JsValue, JsValue> = cached_method_call(
+            GpuReceiverClass::Queue,
+            self.get_queue(),
+            WEBGPU_METHOD_SUBMIT,
+            &array,
+        );
     }
 
     /// Creates a simple render pipeline from a single WGSL shader source.
@@ -3045,8 +3063,12 @@ impl WebGpuRenderer {
         // OPT 2b: cached `pass.setPipeline()` — function is on the
         // shared prototype; the call still passes `this = pass`
         // explicitly because JS `Function` doesn't auto-bind.
-        let set_fn: Function = cached_method(pass, WEBGPU_METHOD_SET_PIPELINE)
-            .unwrap_or_else(|_| JsValue::UNDEFINED.unchecked_into());
+        let set_fn: Function = cached_method(
+            GpuReceiverClass::RenderPass,
+            pass,
+            WEBGPU_METHOD_SET_PIPELINE,
+        )
+        .unwrap_or_else(|_| JsValue::UNDEFINED.unchecked_into());
         let _: Result<JsValue, JsValue> = set_fn.call1(pass, pipeline);
     }
 
@@ -3071,8 +3093,12 @@ impl WebGpuRenderer {
             return;
         }
         // OPT 2b: cached `pass.setVertexBuffer(slot, buffer)`.
-        let set_fn: Function = cached_method(pass, WEBGPU_METHOD_SET_VERTEX_BUFFER)
-            .unwrap_or_else(|_| JsValue::UNDEFINED.unchecked_into());
+        let set_fn: Function = cached_method(
+            GpuReceiverClass::RenderPass,
+            pass,
+            WEBGPU_METHOD_SET_VERTEX_BUFFER,
+        )
+        .unwrap_or_else(|_| JsValue::UNDEFINED.unchecked_into());
         let _: Result<JsValue, JsValue> =
             set_fn.call2(pass, &JsValue::from_f64(f64::from(slot)), buffer);
     }
@@ -3095,8 +3121,12 @@ impl WebGpuRenderer {
             return;
         }
         // OPT 2b: cached `pass.setIndexBuffer(buffer, format)`.
-        let set_fn: Function = cached_method(pass, WEBGPU_METHOD_SET_INDEX_BUFFER)
-            .unwrap_or_else(|_| JsValue::UNDEFINED.unchecked_into());
+        let set_fn: Function = cached_method(
+            GpuReceiverClass::RenderPass,
+            pass,
+            WEBGPU_METHOD_SET_INDEX_BUFFER,
+        )
+        .unwrap_or_else(|_| JsValue::UNDEFINED.unchecked_into());
         let _: Result<JsValue, JsValue> = set_fn.call2(pass, buffer, &JsValue::from_str(format));
     }
 
@@ -3109,8 +3139,9 @@ impl WebGpuRenderer {
     /// - `u32` - The number of instances to draw.
     pub fn draw(&self, pass: &JsValue, vertex_count: u32, instance_count: u32) {
         // OPT 2b: cached `pass.draw(vertexCount, instanceCount)`.
-        let draw_fn: Function = cached_method(pass, WEBGPU_METHOD_DRAW)
-            .unwrap_or_else(|_| JsValue::UNDEFINED.unchecked_into());
+        let draw_fn: Function =
+            cached_method(GpuReceiverClass::RenderPass, pass, WEBGPU_METHOD_DRAW)
+                .unwrap_or_else(|_| JsValue::UNDEFINED.unchecked_into());
         let _: Result<JsValue, JsValue> = draw_fn.call2(
             pass,
             &JsValue::from_f64(f64::from(vertex_count)),
@@ -3131,8 +3162,12 @@ impl WebGpuRenderer {
     /// - `u32` - The number of instances to draw.
     pub fn draw_indexed(&self, pass: &JsValue, index_count: u32, instance_count: u32) {
         // OPT 2b: cached `pass.drawIndexed(indexCount, instanceCount)`.
-        let draw_fn: Function = cached_method(pass, WEBGPU_METHOD_DRAW_INDEXED)
-            .unwrap_or_else(|_| JsValue::UNDEFINED.unchecked_into());
+        let draw_fn: Function = cached_method(
+            GpuReceiverClass::RenderPass,
+            pass,
+            WEBGPU_METHOD_DRAW_INDEXED,
+        )
+        .unwrap_or_else(|_| JsValue::UNDEFINED.unchecked_into());
         let _: Result<JsValue, JsValue> = draw_fn.call2(
             pass,
             &JsValue::from_f64(f64::from(index_count)),
@@ -3177,7 +3212,7 @@ impl WebGpuRenderer {
     /// - `&JsValue` - The render pass encoder to end.
     pub fn end_render_pass(&self, pass: &JsValue) {
         // OPT 2b: cached `pass.end()`.
-        let end_fn: Function = cached_method(pass, WEBGPU_METHOD_END)
+        let end_fn: Function = cached_method(GpuReceiverClass::RenderPass, pass, WEBGPU_METHOD_END)
             .unwrap_or_else(|_| JsValue::UNDEFINED.unchecked_into());
         let _: Result<JsValue, JsValue> = end_fn.call0(pass);
     }
@@ -3193,8 +3228,12 @@ impl WebGpuRenderer {
     /// - `JsValue` - The finished command buffer.
     pub fn finish_command_encoder(&self, encoder: &JsValue) -> JsValue {
         // OPT 2b: cached `encoder.finish()`.
-        let finish_fn: Function = cached_method(encoder, WEBGPU_METHOD_FINISH)
-            .unwrap_or_else(|_| JsValue::UNDEFINED.unchecked_into());
+        let finish_fn: Function = cached_method(
+            GpuReceiverClass::CommandEncoder,
+            encoder,
+            WEBGPU_METHOD_FINISH,
+        )
+        .unwrap_or_else(|_| JsValue::UNDEFINED.unchecked_into());
         finish_fn.call0(encoder).unwrap_or(JsValue::UNDEFINED)
     }
 
@@ -3260,8 +3299,12 @@ impl WebGpuRenderer {
         // synchronously before this function returns.
         let view: Float32Array = unsafe { Float32Array::view(data) };
         // OPT 2b: cached `queue.writeBuffer(buffer, 0, view)`.
-        let write_fn: Function = cached_method(self.get_queue(), WEBGPU_METHOD_WRITE_BUFFER)
-            .unwrap_or_else(|_| JsValue::UNDEFINED.unchecked_into());
+        let write_fn: Function = cached_method(
+            GpuReceiverClass::Queue,
+            self.get_queue(),
+            WEBGPU_METHOD_WRITE_BUFFER,
+        )
+        .unwrap_or_else(|_| JsValue::UNDEFINED.unchecked_into());
         let _: Result<JsValue, JsValue> =
             write_fn.call3(self.get_queue(), buffer, &JsValue::from_f64(0.0), &view);
     }
@@ -3364,8 +3407,9 @@ impl WebGpuRenderer {
     /// - `x`/`y`/`z` - Workgroup counts (each 1..=65535).
     pub fn dispatch(&self, pass: &JsValue, x: u32, y: u32, z: u32) {
         // OPT 2b: cached `pass.dispatchWorkgroups(x, y, z)`.
-        let fn_: Function = cached_method(pass, WEBGPU_METHOD_DISPATCH)
-            .unwrap_or_else(|_| JsValue::UNDEFINED.unchecked_into());
+        let fn_: Function =
+            cached_method(GpuReceiverClass::ComputePass, pass, WEBGPU_METHOD_DISPATCH)
+                .unwrap_or_else(|_| JsValue::UNDEFINED.unchecked_into());
         let _: Result<JsValue, JsValue> = fn_.call3(
             pass,
             &JsValue::from_f64(f64::from(x)),
@@ -3898,8 +3942,12 @@ impl WebGpuRenderer {
         // argument; same pattern applies here (synchronous call).
         let view: Uint8Array = unsafe { Uint8Array::view(data) };
         // OPT 2b: cached `queue.writeBuffer(buffer, offset, view, size)`.
-        let write_fn: Function = cached_method(self.get_queue(), WEBGPU_METHOD_WRITE_BUFFER)
-            .unwrap_or_else(|_| JsValue::UNDEFINED.unchecked_into());
+        let write_fn: Function = cached_method(
+            GpuReceiverClass::Queue,
+            self.get_queue(),
+            WEBGPU_METHOD_WRITE_BUFFER,
+        )
+        .unwrap_or_else(|_| JsValue::UNDEFINED.unchecked_into());
         let _: Result<JsValue, JsValue> = write_fn.call4(
             self.get_queue(),
             buffer,
@@ -4336,7 +4384,31 @@ impl WebGpuRenderer {
         // OPT 2b: cached `pass.setBindGroup(index, bindGroup)`. This is
         // called per-entity per-frame in the 500-entity lighting demo;
         // skipping the `Reflect::get` is a 110ns-per-call saving.
-        let set_fn: Function = cached_method(pass, WEBGPU_METHOD_SET_BIND_GROUP)
+        self.set_bind_group_on(GpuReceiverClass::RenderPass, pass, index, bind_group);
+    }
+
+    /// Class-tagged shared implementation of `setBindGroup`.
+    ///
+    /// Render and compute pass encoders share the `setBindGroup` method
+    /// name but resolve to different prototype `Function`s, so the caller
+    /// must supply the receiver's class for the `cached_method` key. The
+    /// public [`set_bind_group`](Self::set_bind_group) pins `RenderPass`;
+    /// `dispatch_with_bind_group` pins `ComputePass`.
+    ///
+    /// # Arguments
+    ///
+    /// - `GpuReceiverClass` - The receiver's WebGPU class.
+    /// - `&JsValue` - The pass encoder.
+    /// - `u32` - The bind group index (`@group(N)` in WGSL).
+    /// - `&JsValue` - The bind group to bind.
+    pub(crate) fn set_bind_group_on(
+        &self,
+        class: GpuReceiverClass,
+        pass: &JsValue,
+        index: u32,
+        bind_group: &JsValue,
+    ) {
+        let set_fn: Function = cached_method(class, pass, WEBGPU_METHOD_SET_BIND_GROUP)
             .unwrap_or_else(|_| JsValue::UNDEFINED.unchecked_into());
         let _: Result<JsValue, JsValue> =
             set_fn.call2(pass, &JsValue::from_f64(f64::from(index)), bind_group);
@@ -4673,9 +4745,11 @@ impl WebGpuRenderer {
     /// `dispatchWorkgroups` on the given compute pass.
     ///
     /// Equivalent to calling `set_compute_pipeline` + `set_bind_group` +
-    /// `dispatch` individually. Most compute passes only need a single
-    /// pipeline + bind group before dispatching, so this helper avoids
-    /// three Reflect round-trips per dispatch.
+    /// `dispatch` individually, with the bind-group call routed through
+    /// the compute-pass class tag so `cached_method` resolves the
+    /// `GPUComputePassEncoder` prototype `Function` (the public
+    /// `set_bind_group` pins the render-pass class and would TypeError on
+    /// a compute pass).
     ///
     /// # Arguments
     ///
@@ -4695,7 +4769,7 @@ impl WebGpuRenderer {
         z: u32,
     ) {
         self.set_compute_pipeline(pass, pipeline);
-        self.set_bind_group(pass, 0, bind_group);
+        self.set_bind_group_on(GpuReceiverClass::ComputePass, pass, 0, bind_group);
         self.dispatch(pass, x, y, z);
     }
 
@@ -4966,42 +5040,24 @@ impl WebGpuRenderer {
     /// - `&JsValue` - The active `GpuRenderPassEncoder`.
     /// - `&ViewportDescriptor` - The viewport rectangle and (optional) depth range.
     pub fn set_viewport(&self, pass: &JsValue, viewport: &ViewportDescriptor) {
-        let vp_dict: Object = Object::new();
-        let _ = Reflect::set(
-            &vp_dict,
-            &JsValue::from_str(WEBGPU_PROPERTY_X),
-            &JsValue::from_f64(*viewport.get_x() as f64),
-        );
-        let _ = Reflect::set(
-            &vp_dict,
-            &JsValue::from_str(WEBGPU_PROPERTY_Y),
-            &JsValue::from_f64(*viewport.get_y() as f64),
-        );
-        let _ = Reflect::set(
-            &vp_dict,
-            &JsValue::from_str(WEBGPU_PROPERTY_WIDTH),
-            &JsValue::from_f64(*viewport.get_width() as f64),
-        );
-        let _ = Reflect::set(
-            &vp_dict,
-            &JsValue::from_str(WEBGPU_PROPERTY_HEIGHT),
-            &JsValue::from_f64(*viewport.get_height() as f64),
-        );
-        let _ = Reflect::set(
-            &vp_dict,
-            &JsValue::from_str(WEBGPU_PROPERTY_MIN_DEPTH),
-            &JsValue::from_f64(WEBGPU_DEFAULT_VIEWPORT_MIN_DEPTH),
-        );
-        let _ = Reflect::set(
-            &vp_dict,
-            &JsValue::from_str(WEBGPU_PROPERTY_MAX_DEPTH),
-            &JsValue::from_f64(WEBGPU_DEFAULT_VIEWPORT_MAX_DEPTH),
-        );
-        let vp_js: JsValue = vp_dict.unchecked_into::<JsValue>();
-        if let Ok(set_fn) = Reflect::get(pass, &JsValue::from_str(WEBGPU_METHOD_SET_VIEWPORT))
-            && let Ok(set_callable) = set_fn.dyn_into::<Function>()
-        {
-            let _: Result<JsValue, JsValue> = set_callable.call1(pass, &vp_js);
+        // WebGPU `setViewport(x, y, width, height, minDepth, maxDepth)`
+        // takes six scalar arguments — the previous descriptor-dict form
+        // never validated (`call1` with one object → NaN viewport, error
+        // silently swallowed). Scalars also drop the per-call `Object`
+        // allocation and 11 `from_str` property keys.
+        let args: Array = Array::new_with_length(6);
+        args.set(0, JsValue::from_f64(*viewport.get_x() as f64));
+        args.set(1, JsValue::from_f64(*viewport.get_y() as f64));
+        args.set(2, JsValue::from_f64(*viewport.get_width() as f64));
+        args.set(3, JsValue::from_f64(*viewport.get_height() as f64));
+        args.set(4, JsValue::from_f64(WEBGPU_DEFAULT_VIEWPORT_MIN_DEPTH));
+        args.set(5, JsValue::from_f64(WEBGPU_DEFAULT_VIEWPORT_MAX_DEPTH));
+        if let Ok(set_fn) = cached_method(
+            GpuReceiverClass::RenderPass,
+            pass,
+            WEBGPU_METHOD_SET_VIEWPORT,
+        ) {
+            let _: Result<JsValue, JsValue> = set_fn.apply(pass, &args);
         }
     }
 
@@ -5021,32 +5077,22 @@ impl WebGpuRenderer {
     /// - `u32` - Scissor width in pixels.
     /// - `u32` - Scissor height in pixels.
     pub fn set_scissor_rect(&self, pass: &JsValue, x: u32, y: u32, width: u32, height: u32) {
-        let rect_dict: Object = Object::new();
-        let _ = Reflect::set(
-            &rect_dict,
-            &JsValue::from_str(WEBGPU_PROPERTY_X),
-            &JsValue::from_f64(x as f64),
-        );
-        let _ = Reflect::set(
-            &rect_dict,
-            &JsValue::from_str(WEBGPU_PROPERTY_Y),
-            &JsValue::from_f64(y as f64),
-        );
-        let _ = Reflect::set(
-            &rect_dict,
-            &JsValue::from_str(WEBGPU_PROPERTY_WIDTH),
-            &JsValue::from_f64(width as f64),
-        );
-        let _ = Reflect::set(
-            &rect_dict,
-            &JsValue::from_str(WEBGPU_PROPERTY_HEIGHT),
-            &JsValue::from_f64(height as f64),
-        );
-        let rect_js: JsValue = rect_dict.unchecked_into::<JsValue>();
-        if let Ok(set_fn) = Reflect::get(pass, &JsValue::from_str(WEBGPU_METHOD_SET_SCISSOR_RECT))
-            && let Ok(set_callable) = set_fn.dyn_into::<Function>()
-        {
-            let _: Result<JsValue, JsValue> = set_callable.call1(pass, &rect_js);
+        // WebGPU `setScissorRect(x, y, width, height)` takes four scalar
+        // arguments — the previous descriptor-dict form never validated
+        // (`call1` with one object → NaN scissor, error silently
+        // swallowed). Scalars also drop the per-call `Object` allocation
+        // and 8 `from_str` property keys.
+        let args: Array = Array::new_with_length(4);
+        args.set(0, JsValue::from_f64(x as f64));
+        args.set(1, JsValue::from_f64(y as f64));
+        args.set(2, JsValue::from_f64(width as f64));
+        args.set(3, JsValue::from_f64(height as f64));
+        if let Ok(set_fn) = cached_method(
+            GpuReceiverClass::RenderPass,
+            pass,
+            WEBGPU_METHOD_SET_SCISSOR_RECT,
+        ) {
+            let _: Result<JsValue, JsValue> = set_fn.apply(pass, &args);
         }
     }
 

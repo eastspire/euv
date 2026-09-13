@@ -217,7 +217,7 @@ pub(crate) fn cached_method_name(name: &'static str) -> JsValue {
 }
 
 /// OPT 2b: thread-local cache of WebGPU `Function` objects keyed by
-/// `(receiver_ptr, method_name)`.
+/// `(GpuReceiverClass, method_name)`.
 ///
 /// `cached_method_name` only avoids the `JsValue::from_str(METHOD_NAME)`
 /// allocation; the subsequent `Reflect::get(obj, name)` still costs a JS
@@ -229,16 +229,19 @@ pub(crate) fn cached_method_name(name: &'static str) -> JsValue {
 ///
 /// # Key design
 ///
-/// - **Receiver identity** is taken as `&obj as *const JsValue as usize`:
-///   the underlying wasm linear-memory address of the `JsValue` is stable
-///   for the lifetime of the JS object, and the prototype's `Function` is
-///   the same instance across all live receivers of a given class. WebGPU
-///   objects (device, queue, encoder, pass encoder) are all allocated once
-///   and reused for the renderer lifetime, so the cache hits on the second
-///   call and stays hot.
+/// - **Receiver class** (`GpuReceiverClass`) is the identity half of the
+///   cache key. Prototype `Function`s are per-class singletons, so the
+///   class tag alone is sufficient — no receiver identity is required.
+///   The previous scheme keyed by the `JsValue`'s stack address, which was
+///   unsound: per-frame temporaries (pass encoders, command encoders)
+///   reuse stack slots across frames, and classes like
+///   `GPURenderPassEncoder` / `GPUComputePassEncoder` share method names
+///   (`setPipeline` / `setBindGroup` / `end`), so a stale slot could
+///   return the wrong class's `Function` (a swallowed TypeError and a
+///   silently skipped GPU call).
 /// - **Method name** is `&'static str`: callers must pass one of the
 ///   `WEBGPU_METHOD_*` constants. This keeps the cache key allocation-free.
-/// - **First call only**: the first time a `(receiver, method)` pair is
+/// - **First call only**: the first time a `(class, method)` pair is
 ///   seen, we fall back to `Reflect::get(obj, name)` to populate the cache.
 ///   All later calls bypass `Reflect::get` entirely.
 ///
@@ -254,7 +257,9 @@ pub(crate) fn cached_method_name(name: &'static str) -> JsValue {
 ///
 /// # Arguments
 ///
-/// - `obj` - The receiver (`this`) for the call. Cached by its address.
+/// - `class` - The receiver's WebGPU class (cache key half).
+/// - `obj` - The receiver (`this`) for the call; used for the first
+///   `Reflect::get` lookup, not part of the key.
 /// - `method_name` - A `'static str` matching a `WEBGPU_METHOD_*` constant.
 ///
 /// # Returns
@@ -266,17 +271,23 @@ pub(crate) fn cached_method_name(name: &'static str) -> JsValue {
 /// `Function::call0(this)`, `call1(this, &arg)`, `call2(this, &a, &b)`, ...
 /// as appropriate. JS `Function` objects don't bind `this`, so the caller
 /// must always pass `obj` (or `this`) as the first argument.
-pub(crate) fn cached_method(obj: &JsValue, method_name: &'static str) -> Result<Function, JsValue> {
+pub(crate) fn cached_method(
+    class: GpuReceiverClass,
+    obj: &JsValue,
+    method_name: &'static str,
+) -> Result<Function, JsValue> {
     thread_local! {
         static FUNCTION_CACHE: RefCell<
-            Option<HashMap<(usize, &'static str), Function>>,
+            Option<HashMap<(GpuReceiverClass, &'static str), Function>>,
         > = const { RefCell::new(None) };
     }
-    let key: (usize, &'static str) = (obj as *const JsValue as usize, method_name);
+    let key: (GpuReceiverClass, &'static str) = (class, method_name);
     FUNCTION_CACHE.with(|slot| {
-        let mut borrow: std::cell::RefMut<'_, Option<HashMap<(usize, &'static str), Function>>> =
-            slot.borrow_mut();
-        let map: &mut HashMap<(usize, &'static str), Function> =
+        let mut borrow: std::cell::RefMut<
+            '_,
+            Option<HashMap<(GpuReceiverClass, &'static str), Function>>,
+        > = slot.borrow_mut();
+        let map: &mut HashMap<(GpuReceiverClass, &'static str), Function> =
             borrow.get_or_insert_with(HashMap::new);
         if let Some(func) = map.get(&key) {
             return Ok(func.clone());
@@ -296,10 +307,11 @@ pub(crate) fn cached_method(obj: &JsValue, method_name: &'static str) -> Result<
 /// the common 1-argument WebGPU method call. See [`cached_method`]
 /// for the cache semantics.
 pub(crate) fn cached_method_call(
+    class: GpuReceiverClass,
     obj: &JsValue,
     method_name: &'static str,
     arg: &JsValue,
 ) -> Result<JsValue, JsValue> {
-    let function: Function = cached_method(obj, method_name)?;
+    let function: Function = cached_method(class, obj, method_name)?;
     function.call1(obj, arg)
 }
