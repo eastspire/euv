@@ -18,16 +18,24 @@ pub fn euv_logo(node: VirtualNode<EuvLogoProps>) -> VirtualNode {
     let EuvLogoProps { variant, on_click }: EuvLogoProps = node.try_get_props().unwrap_or_default();
     let children: VirtualNode = node.get_children().into();
     let class_name: String = match variant {
-        LogoButtonVariant::Nav => format!(
-            "{} {}",
-            c_euv_logo().get_name(),
-            c_euv_logo_nav().get_name()
-        ),
-        LogoButtonVariant::Fab => format!(
-            "{} {}",
-            c_euv_logo().get_name(),
-            c_euv_logo_fab().get_name()
-        ),
+        LogoButtonVariant::Nav => {
+            let (base, variant_name): (&str, &str) =
+                (c_euv_logo().get_name(), c_euv_logo_nav().get_name());
+            let mut name: String = String::with_capacity(base.len() + 1 + variant_name.len());
+            name.push_str(base);
+            name.push(' ');
+            name.push_str(variant_name);
+            name
+        }
+        LogoButtonVariant::Fab => {
+            let (base, variant_name): (&str, &str) =
+                (c_euv_logo().get_name(), c_euv_logo_fab().get_name());
+            let mut name: String = String::with_capacity(base.len() + 1 + variant_name.len());
+            name.push_str(base);
+            name.push(' ');
+            name.push_str(variant_name);
+            name
+        }
     };
     if on_click.is_some() {
         html! {

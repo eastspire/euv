@@ -59,13 +59,15 @@ pub fn euv_vconsole_fab(node: VirtualNode<EuvVconsoleFabProps>) -> VirtualNode {
                 variant: LogoButtonVariant::Fab
                 on_click: Console::fab_on_click(panel_open)
                 span {
-                    class: if { !console_signal.get().is_empty() } {
+                    class: if { !console_signal.with(|entries: &Vec<ConsoleEntry>| entries.is_empty()) } {
                         c_vconsole_badge()
                     }
-                    if { console_signal.get().len() > 99 } {
+                    if { console_signal.with(|entries: &Vec<ConsoleEntry>| entries.len()) > 99 } {
                         "99+"
-                    } else if { !console_signal.get().is_empty() } {
-                        console_signal.get().len().to_string()
+                    } else if { !console_signal.with(|entries: &Vec<ConsoleEntry>| entries.is_empty()) } {
+                        {
+                            console_signal.with(|entries: &Vec<ConsoleEntry>| entries.len().to_string())
+                        }
                     }
                 }
             }
@@ -131,7 +133,9 @@ pub fn euv_vconsole_drawer(node: VirtualNode<EuvVconsoleDrawerProps>) -> Virtual
                         "Console"
                         span {
                             class: c_vconsole_count()
-                            format!(" ({})", console_signal.get().len())
+                            {
+                                console_signal.with(|entries: &Vec<ConsoleEntry>| format!(" ({})", entries.len()))
+                            }
                         }
                     }
                     div {
@@ -206,8 +210,10 @@ pub fn euv_vconsole_drawer(node: VirtualNode<EuvVconsoleDrawerProps>) -> Virtual
 /// times per render (once for the empty-state class branch, once for the
 /// log-list class branch, and once for the `for` body) — each call cloned
 /// the entire log Vec. With 200 entries that was 600 entry clones per
-/// render. We now subscribe to `logs` + `filter` via `computed!` and the
-/// resulting cached signal is read once per render.
+/// render. We now subscribe to `logs` + `filter` via `computed!`; the
+/// recompute closure consumes the passed snapshots directly (no signal
+/// re-reads), and the cached result is read once per render via
+/// `Signal::with` (no further clone).
 ///
 /// # Arguments
 ///
@@ -225,40 +231,53 @@ fn build_vconsole_log_nodes(
         computed!(logs, filter, |log_snapshot: Vec<ConsoleEntry>,
                                  current_filter: LogFilter|
          -> Vec<(usize, ConsoleEntry)> {
-            let _ = log_snapshot;
-            let _ = current_filter;
-            Console::filter_entries(logs, filter)
+            // Use the passed snapshots directly — re-reading the signals
+            // here would pay two more full-vec clones per recompute.
+            let mut result: Vec<(usize, ConsoleEntry)> = log_snapshot
+                .iter()
+                .enumerate()
+                .filter(|(_, entry): &(usize, &ConsoleEntry)| match current_filter {
+                    LogFilter::All => true,
+                    LogFilter::Log => entry.get_level() == LogLevel::Log,
+                    LogFilter::Warn => entry.get_level() == LogLevel::Warn,
+                    LogFilter::Error => entry.get_level() == LogLevel::Error,
+                })
+                .map(|(index, entry): (usize, &ConsoleEntry)| (index, entry.clone()))
+                .collect();
+            result.reverse();
+            result
         });
-    let snapshot: Vec<(usize, ConsoleEntry)> = cached_filter.get();
-    let snapshot_ref: &[(usize, ConsoleEntry)] = snapshot.as_slice();
-    let snapshot_len: usize = snapshot_ref.len();
-    let entries_iter = snapshot_ref.iter();
-    html! {
-        div {
-            class: if { snapshot_len == 0 } {
-                c_vconsole_empty()
-            } else {
-                c_vconsole_empty_hidden()
+    // Read the cached filtered vec via `with` — a `get()` would deep-clone
+    // it once more per render on top of the computed snapshot.
+    cached_filter.with(|snapshot: &Vec<(usize, ConsoleEntry)>| {
+        let snapshot_len: usize = snapshot.len();
+        html! {
+            div {
+                class: if { snapshot_len == 0 } {
+                    c_vconsole_empty()
+                } else {
+                    c_vconsole_empty_hidden()
+                }
+                "No logs yet."
             }
-            "No logs yet."
-        }
-        div {
-            class: if { snapshot_len == 0 } {
-                c_vconsole_log_list_hidden()
-            } else {
-                c_vconsole_log_list()
-            }
-            for (index, entry) in entries_iter {
-                div {
-                    key: index.to_string()
-                    class: c_vconsole_log_item()
-                    span {
-                        class: c_vconsole_level_badge()
-                        entry.get_level().badge()
+            div {
+                class: if { snapshot_len == 0 } {
+                    c_vconsole_log_list_hidden()
+                } else {
+                    c_vconsole_log_list()
+                }
+                for (index, entry) in snapshot.iter() {
+                    div {
+                        key: index.to_string()
+                        class: c_vconsole_log_item()
+                        span {
+                            class: c_vconsole_level_badge()
+                            entry.get_level().badge()
+                        }
+                        entry.get_message().clone()
                     }
-                    entry.get_message().clone()
                 }
             }
         }
-    }
+    })
 }

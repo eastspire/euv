@@ -174,8 +174,10 @@ pub fn euv_nav_items(node: VirtualNode<EuvNavItemsProps>) -> VirtualNode {
                     let on_navigate: Option<NavEventCallback> = on_item_click.as_ref().map(
                         |cb: &NavItemClickCallback| -> NavEventCallback {
                             let callback: NavItemClickCallback = cb.clone();
-                            let target_str: String = target.to_string();
-                            Rc::new(move || callback(&target_str))
+                            // `target` is `&'static str` — capture it
+                            // directly instead of allocating a `String`
+                            // per item per render.
+                            Rc::new(move || callback(target))
                         },
                     );
                     html! {
@@ -192,8 +194,7 @@ pub fn euv_nav_items(node: VirtualNode<EuvNavItemsProps>) -> VirtualNode {
                     let on_click: Option<ClickEventHandler> = on_item_click.as_ref().map(
                         |cb: &NavItemClickCallback| -> ClickEventHandler {
                             let callback: NavItemClickCallback = cb.clone();
-                            let target_str: String = target.to_string();
-                            Rc::new(move |_: Event| callback(&target_str))
+                            Rc::new(move |_: Event| callback(target))
                         },
                     );
                     html! {

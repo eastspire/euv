@@ -314,6 +314,12 @@ impl UseEuvCamera {
         let on_scan_error: Closure<dyn FnMut(JsValue)> =
             Closure::wrap(Box::new(move |_error: JsValue| {}));
         let detect_fn: Function = Self::cached_detect_fn(&detector);
+        // Cache the video element across scan ticks: `query_selector` costs
+        // one JS crossing plus a JS-side selector parse per tick; the element
+        // is stable for a scan session and is re-validated cheaply via
+        // `is_connected` (re-resolved if the DOM node was swapped).
+        let video_element_cache: Rc<RefCell<Option<HtmlVideoElement>>> =
+            Rc::new(RefCell::new(None));
         let handle: IntervalHandle = App::use_interval(cfg.scan_interval_millis, move || {
             let on_detected: &Closure<dyn FnMut(JsValue)> = &on_detected;
             let on_scan_error: &Closure<dyn FnMut(JsValue)> = &on_scan_error;
@@ -324,10 +330,22 @@ impl UseEuvCamera {
             let Some(document) = window_value.document() else {
                 return;
             };
-            let Some(element) = document.query_selector(&video_selector).ok().flatten() else {
-                return;
+            let video_element: HtmlVideoElement = {
+                let mut cache: std::cell::RefMut<'_, Option<HtmlVideoElement>> =
+                    video_element_cache.borrow_mut();
+                match cache.as_ref() {
+                    Some(cached) if cached.is_connected() => cached.clone(),
+                    _ => {
+                        let Some(element) = document.query_selector(&video_selector).ok().flatten()
+                        else {
+                            return;
+                        };
+                        let resolved: HtmlVideoElement = element.unchecked_into();
+                        *cache = Some(resolved.clone());
+                        resolved
+                    }
+                }
             };
-            let video_element: HtmlVideoElement = element.unchecked_into();
             if video_element.ready_state() != HtmlMediaElement::HAVE_ENOUGH_DATA {
                 return;
             }
