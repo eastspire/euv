@@ -3132,7 +3132,6 @@ impl WebGpuRenderer {
             return;
         }
         // OPT 2b: cached `pass.setIndexBuffer(buffer, format)`.
-// OPT 2b: cached `pass.setIndexBuffer(buffer, format)`.
         // The two spec formats hit the thread-local `JsValue` cache instead
         // of paying a fresh JS string allocation per call (per entity per
         // frame in mesh scenes).
