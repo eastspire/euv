@@ -56,27 +56,6 @@ pub(crate) struct SignalUpdateSlot {
     pub(crate) dirty: bool,
 }
 
-/// A typed binding from a bridge `Signal<String>` to a specific DOM
-/// mutation.
-///
-/// Replaces the older bridge-signal + `BridgeRefsCell::track` chain for
-/// per-`{sig}` mount paths. The bridge's listener captures the typed
-/// bridge by move and on every set fires a single typed mutation directly
-/// without going through `BridgeRefsCell`, `is_connected()`, or an
-/// `attr_name.to_string()` clone per signal set. The bridge struct is
-/// stored in `ATTRIBUTE_BRIDGES` keyed by the bridge signal's address and
-/// freed by `Registry::cleanup_attribute_bridge` at the same time
-/// `Signal::<String>::clear_listeners` releases the bridge signal's
-/// listener closure.
-///
-/// Variants:
-/// - `SetAttribute` — write `attr_name = value` on an Element. Used by
-///   `AttributeValue::Signal` mount paths.
-/// - `SetInnerHtml` — replace `innerHTML` on an Element. Used by
-///   `AttributeValue::InnerHtmlSignal` mount paths.
-/// - `SetTextContent` — replace the text on a `Text` node. Used by the
-///   text-signal mount path in `create_dom_with_doc`.
-///
 /// A `Sync` wrapper for single-threaded global `HashMap` access.
 ///
 /// SAFETY: This type is only safe to use in single-threaded contexts

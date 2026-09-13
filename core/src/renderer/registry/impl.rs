@@ -373,26 +373,6 @@ impl Registry {
         }
     }
 
-    /// Registers a signal update callback for an attribute signal.
-    ///
-    /// Similar to `register_dynamic`, but for attribute-level signals that
-    /// need to update DOM element attributes rather than entire subtrees.
-    ///
-    /// # Arguments
-    ///
-    /// - `usize` - The signal's inner address used as the registry key.
-    /// - `Box<dyn FnMut()>` - The callback to invoke when the attribute needs updating.
-    pub(crate) fn register_attr_listener(signal_key: usize, callback: Box<dyn FnMut()>) {
-        let slot: Box<SignalUpdateSlot> =
-            Box::new(SignalUpdateSlot::new(Some(callback), false, true));
-        let entry: SignalUpdateEntry = Box::into_raw(slot);
-        if let Some(old_entry) = Self::get_mut_update_registry().insert(signal_key, entry) {
-            unsafe {
-                let _: Box<SignalUpdateSlot> = Box::from_raw(old_entry);
-            }
-        }
-    }
-
     /// Cleans up all handler entries associated with a DOM element.
     ///
     /// Removes all event handlers registered for the given element ID,
