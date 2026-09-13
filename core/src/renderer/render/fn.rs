@@ -28,7 +28,7 @@ where
     write(element, &initial_value);
     let euv_id: usize = element.ensure_euv_id();
     let element_clone: Element = element.clone();
-    let subscription_id: u64 = signal.subscribe(move || {
+    let subscription_id: usize = signal.subscribe(move || {
         // No `is_connected` guard: the binding is torn down synchronously
         // by `cleanup_subtree` (via `take_binding_cleanups`) before the
         // element leaves the DOM, so a stale fire is impossible — and for
