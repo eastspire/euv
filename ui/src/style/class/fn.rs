@@ -1038,13 +1038,14 @@ class! {
     }
 
     pub c_counter_value_row {
-        display: "flex";
-        align-items: "center";
-        gap: var!(gap-element);
-        min-height: var!(min-height-base);
-        padding: format!("0px {}", var!(space-lg));
+        padding-left: format!("calc(1px + {})", var!(space-lg));
+        padding-right: format!("calc(1px + {})", var!(space-lg));
+        margin-top: var!(space-sm);
         word-break: "break-all";
         overflow-wrap: "anywhere";
+        font-size: var!(font-base);
+        color: "inherit";
+        font-weight: "500";
     }
 
     pub c_badge_row {

@@ -50,10 +50,9 @@ pub(crate) fn page_hooks_timing(node: VirtualNode<PageHooksTimingProps>) -> Virt
                         oninput: timing_debounce_on_input(live_debounce, debounced, current, previous)
                     }
                 }
-                div {
-                    class: c_counter_value_row()
-                    span {
-                        class: c_counter_value()
+                if { !timing_signal_to_string(&debounced_value).is_empty() } {
+                    div {
+                        class: c_counter_value_row()
                         timing_signal_to_string(&debounced_value)
                     }
                 }
@@ -73,10 +72,9 @@ pub(crate) fn page_hooks_timing(node: VirtualNode<PageHooksTimingProps>) -> Virt
                         oninput: timing_throttle_on_input(live_throttle, throttled, current, previous)
                     }
                 }
-                div {
-                    class: c_counter_value_row()
-                    span {
-                        class: c_counter_value()
+                if { !timing_signal_to_string(&throttled_value).is_empty() } {
+                    div {
+                        class: c_counter_value_row()
                         timing_signal_to_string(&throttled_value)
                     }
                 }
