@@ -54,17 +54,13 @@ pub(crate) fn page_timer(node: VirtualNode<PageTimerProps>) -> VirtualNode {
                 }
                 div {
                     class: c_timer_controls()
-                    if { !stopwatch.get_running().get() } {
-                        euv_button {
-                            variant: EuvButtonVariant::Primary
-                            label: "Start"
-                            onclick: stopwatch_on_start(stopwatch)
-                        }
-                    } else {
-                        euv_button {
-                            variant: EuvButtonVariant::Primary
-                            label: "Pause"
-                            onclick: stopwatch_on_pause(stopwatch)
+                    button {
+                        class: c_euv_button_primary_md()
+                        onclick: stopwatch_on_start(stopwatch)
+                        if { !stopwatch.get_running().get() } {
+                            "Start"
+                        } else {
+                            "Pause"
                         }
                     }
                     euv_button {
@@ -107,17 +103,13 @@ pub(crate) fn page_timer(node: VirtualNode<PageTimerProps>) -> VirtualNode {
                 }
                 div {
                     class: c_timer_controls()
-                    if { !countdown.get_running().get() } {
-                        euv_button {
-                            variant: EuvButtonVariant::Primary
-                            label: "Start"
-                            onclick: countdown_on_start(countdown)
-                        }
-                    } else {
-                        euv_button {
-                            variant: EuvButtonVariant::Primary
-                            label: "Pause"
-                            onclick: countdown_on_pause(countdown)
+                    button {
+                        class: c_euv_button_primary_md()
+                        onclick: countdown_on_start(countdown)
+                        if { !countdown.get_running().get() } {
+                            "Start"
+                        } else {
+                            "Pause"
                         }
                     }
                     euv_button {
