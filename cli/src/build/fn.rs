@@ -65,8 +65,8 @@ pub fn minify_html_template(html: &str) -> String {
                         } else {
                             HTML_SCRIPT_CLOSE_PREFIX_BYTES.len()
                         };
-                        for j in i + 1..i + end_len {
-                            out.push(bytes[j]);
+                        for &b in &bytes[i + 1..i + end_len] {
+                            out.push(b);
                         }
                         i = close_end;
                         in_preserve = false;
