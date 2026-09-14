@@ -57,9 +57,11 @@ pub(crate) async fn generate_html(config: &HtmlConfig) -> Result<String, EuvErro
     } else {
         INDEX_HTML_DEV.to_string()
     };
-    let html: String = template_content
-        .replace(IMPORT_PATH_PLACEHOLDER, config.get_import_path())
-        .replace(RELOAD_ROUTE_PLACEHOLDER, RELOAD_ROUTE);
+    let html: String = minify_html_template(
+        &template_content
+            .replace(IMPORT_PATH_PLACEHOLDER, config.get_import_path())
+            .replace(RELOAD_ROUTE_PLACEHOLDER, RELOAD_ROUTE),
+    );
     let index_path: PathBuf = config.get_serving_root().join(INDEX_HTML_FILE_NAME);
     create_dir_all(config.get_serving_root())
         .await

@@ -43,14 +43,87 @@ pub const JS_EXTENSION: &str = ".js";
 /// The source directory name within a Cargo project.
 pub const SRC_DIR_NAME: &str = "src";
 
+/// The subdirectory of `pkg/` that holds wasm-bindgen `inline_js` snippets.
+pub const SNIPPETS_DIR_NAME: &str = "snippets";
+
 /// The name of the gitignore file.
 pub const GITIGNORE_FILE_NAME: &str = ".gitignore";
+
+/// The glob suffix that matches wasm-bindgen snippet files (`inline0.js`,
+/// `inline1.js`, etc. — one per `#[wasm_bindgen(inline_js = ...)]` block).
+pub const SNIPPET_FILE_PREFIX: &str = "inline";
 
 /// The name of the Cargo manifest file.
 pub const CARGO_TOML_FILE_NAME: &str = "Cargo.toml";
 
 /// The index HTML file name.
 pub const INDEX_HTML_FILE_NAME: &str = "index.html";
+
+/// ASCII byte slice for the HTML comment close delimiter (`-->`).
+///
+/// Used by the inline HTML minifier to detect end-of-comment while
+/// scanning an HTML template byte stream.
+pub const HTML_COMMENT_CLOSE_BYTES: &[u8] = b"-->";
+
+/// ASCII byte slice for the HTML comment open delimiter (`<!--`).
+///
+/// Used by the inline HTML minifier to detect start-of-comment while
+/// scanning an HTML template byte stream.
+pub const HTML_COMMENT_OPEN_BYTES: &[u8] = b"<!--";
+
+/// The HTML greater-than tag delimiter (`>`) as a single ASCII byte.
+///
+/// Used by the inline HTML minifier to detect the end of an opening tag
+/// and trigger tag-gap whitespace stripping.
+pub const HTML_GT: u8 = b'>';
+
+/// The HTML less-than tag delimiter (`<`) as a single ASCII byte.
+///
+/// Used by the inline HTML minifier to detect the start of a tag and
+/// enter tag-internal whitespace collapsing.
+pub const HTML_LT: u8 = b'<';
+
+/// ASCII byte slice for the closing `</script` tag without the trailing
+/// `>` or whitespace.
+///
+/// Used by the inline HTML minifier to detect the end of an inline-JS
+/// preserve region inside the HTML template.
+pub const HTML_SCRIPT_CLOSE_PREFIX_BYTES: &[u8] = b"</script";
+
+/// ASCII byte slice for the opening `<script` tag without the trailing
+/// `>` or whitespace.
+///
+/// Used by the inline HTML minifier to detect the start of an inline-JS
+/// preserve region inside the HTML template.
+pub const HTML_SCRIPT_OPEN_PREFIX_BYTES: &[u8] = b"<script";
+
+/// The HTML forward-slash character as a single ASCII byte.
+///
+/// Used by the inline HTML minifier to detect closing tags (e.g.
+/// `</style>`) and self-closing tags (`<br/>`) while scanning the
+/// template byte stream.
+pub const HTML_SLASH: u8 = b'/';
+
+/// The ASCII space byte used as the canonical collapsed-whitespace output
+/// by the inline HTML minifier.
+///
+/// Whenever a run of whitespace characters collapses to a single space,
+/// this byte is written to the output buffer.
+pub const HTML_SPACE: u8 = b' ';
+
+/// ASCII byte slice for the closing `</style` tag without the trailing
+/// `>` or whitespace.
+///
+/// Used by the inline HTML minifier to detect the end of an inline-CSS
+/// preserve region inside the HTML template.
+pub const HTML_STYLE_CLOSE_PREFIX_BYTES: &[u8] = b"</style";
+
+/// ASCII byte slice for the opening `<style` tag without the trailing
+/// `>` or whitespace.
+///
+/// Used by the inline HTML minifier to detect the start of an inline-CSS
+/// preserve region inside the HTML template.
+pub const HTML_STYLE_OPEN_PREFIX_BYTES: &[u8] = b"<style";
 
 /// The relative path prefix used for import path construction.
 pub const RELATIVE_PATH_PREFIX: &str = "./";

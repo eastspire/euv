@@ -1,0 +1,22 @@
+export function euv_event_collect_id_chain(event, max_depth) {
+    const ids = [];
+    let node = event.target;
+    let depth = 0;
+    while (node) {
+        if (max_depth !== 0 && depth >= max_depth) {
+            break;
+        }
+        if (node.nodeType === 1) {
+            const id = node.getAttribute && node.getAttribute("data-euv-id");
+            if (id !== null && id !== undefined && id !== "") {
+                const parsed = parseInt(id, 10);
+                if (!isNaN(parsed)) {
+                    ids.push(parsed);
+                }
+            }
+        }
+        node = node.parentElement;
+        depth += 1;
+    }
+    return Float64Array.from(ids);
+}

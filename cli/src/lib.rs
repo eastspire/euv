@@ -13,6 +13,7 @@ mod mode;
 mod server;
 
 use log::SetLoggerError;
+pub use minify_js::{Session, TopLevelMode, minify};
 pub use std::{
     error::Error,
     ffi::OsStr,

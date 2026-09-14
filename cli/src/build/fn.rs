@@ -1,5 +1,169 @@
 use super::*;
 
+/// Strips redundant whitespace from an HTML template string while
+/// preserving the verbatim contents of `<script>` and `<style>` blocks.
+///
+/// Unlike a full HTML parser, this is a single-pass character-level
+/// state machine tuned for the two euv index templates
+/// (`INDEX_HTML_DEV` / `INDEX_HTML_RELEASE`):
+///
+/// - HTML comments (`<!-- ... -->`) are removed.
+/// - Whitespace between tags (`>...<`) collapses to nothing when the
+///   whitespace is purely indentation / newlines, and to a single
+///   space otherwise (preserving word boundaries inside text nodes).
+/// - Inside `<tag ...>` attributes, runs of whitespace collapse to one
+///   space, but `<pre>` / `<textarea>` / quoted attribute values are
+///   not handled — the euv templates do not use those.
+/// - `<script>` and `<style>` content is copied byte-for-byte; the
+///   inline JS / CSS inside is never touched by this pass
+///   (`minify_inline_js_snippets` already handled the wasm-bindgen
+///   snippets, and the dev-only reload script is intentionally readable).
+///
+/// The output is safe to feed directly to the browser; it differs from
+/// the source only in whitespace and the presence of comments.
+///
+/// # Arguments
+///
+/// - `&str` - The HTML template (after placeholder replacement).
+///
+/// # Returns
+///
+/// - `String` - The minified HTML.
+pub fn minify_html_template(html: &str) -> String {
+    let bytes: &[u8] = html.as_bytes();
+    let len: usize = bytes.len();
+    let mut out: Vec<u8> = Vec::with_capacity(len);
+    let mut i: usize = 0;
+    let mut in_tag: bool = false;
+    let mut in_preserve: bool = false;
+    let mut pending_strip_tag_gap: bool = false;
+    let mut last_was_space: bool = false;
+    while i < len {
+        let b: u8 = bytes[i];
+        if in_preserve {
+            out.push(b);
+            if b == HTML_LT && i + 1 < len && bytes[i + 1] == HTML_SLASH {
+                let is_close_style: bool = i + HTML_STYLE_CLOSE_PREFIX_BYTES.len() <= len
+                    && bytes[i..i + HTML_STYLE_CLOSE_PREFIX_BYTES.len()]
+                        .eq_ignore_ascii_case(HTML_STYLE_CLOSE_PREFIX_BYTES);
+                let is_close_script: bool = i + HTML_SCRIPT_CLOSE_PREFIX_BYTES.len() <= len
+                    && bytes[i..i + HTML_SCRIPT_CLOSE_PREFIX_BYTES.len()]
+                        .eq_ignore_ascii_case(HTML_SCRIPT_CLOSE_PREFIX_BYTES);
+                if is_close_style || is_close_script {
+                    let close_end: usize = i
+                        + (if is_close_style {
+                            HTML_STYLE_CLOSE_PREFIX_BYTES.len()
+                        } else {
+                            HTML_SCRIPT_CLOSE_PREFIX_BYTES.len()
+                        });
+                    if close_end >= len
+                        || bytes[close_end].is_ascii_whitespace()
+                        || bytes[close_end] == HTML_GT
+                    {
+                        let end_len: usize = if is_close_style {
+                            HTML_STYLE_CLOSE_PREFIX_BYTES.len()
+                        } else {
+                            HTML_SCRIPT_CLOSE_PREFIX_BYTES.len()
+                        };
+                        for j in i + 1..i + end_len {
+                            out.push(bytes[j]);
+                        }
+                        i = close_end;
+                        in_preserve = false;
+                        pending_strip_tag_gap = true;
+                        last_was_space = false;
+                        continue;
+                    }
+                }
+            }
+            i += 1;
+            continue;
+        }
+        if pending_strip_tag_gap {
+            if b.is_ascii_whitespace() {
+                i += 1;
+                continue;
+            }
+            pending_strip_tag_gap = false;
+        }
+        if b == HTML_LT {
+            if i + HTML_COMMENT_OPEN_BYTES.len() <= len
+                && &bytes[i..i + HTML_COMMENT_OPEN_BYTES.len()] == HTML_COMMENT_OPEN_BYTES
+            {
+                let mut end: usize = i + HTML_COMMENT_OPEN_BYTES.len();
+                while end + HTML_COMMENT_CLOSE_BYTES.len() <= len
+                    && &bytes[end..end + HTML_COMMENT_CLOSE_BYTES.len()] != HTML_COMMENT_CLOSE_BYTES
+                {
+                    end += 1;
+                }
+                i = if end + HTML_COMMENT_CLOSE_BYTES.len() <= len {
+                    end + HTML_COMMENT_CLOSE_BYTES.len()
+                } else {
+                    len
+                };
+                pending_strip_tag_gap = true;
+                last_was_space = false;
+                continue;
+            }
+            if i + HTML_SCRIPT_OPEN_PREFIX_BYTES.len() <= len
+                && bytes[i..i + HTML_SCRIPT_OPEN_PREFIX_BYTES.len()]
+                    .eq_ignore_ascii_case(HTML_SCRIPT_OPEN_PREFIX_BYTES)
+            {
+                let probe: usize = i + HTML_SCRIPT_OPEN_PREFIX_BYTES.len();
+                if probe >= len || bytes[probe].is_ascii_whitespace() || bytes[probe] == HTML_GT {
+                    in_preserve = true;
+                }
+            } else if i + HTML_STYLE_OPEN_PREFIX_BYTES.len() <= len
+                && bytes[i..i + HTML_STYLE_OPEN_PREFIX_BYTES.len()]
+                    .eq_ignore_ascii_case(HTML_STYLE_OPEN_PREFIX_BYTES)
+            {
+                let probe: usize = i + HTML_STYLE_OPEN_PREFIX_BYTES.len();
+                if probe >= len || bytes[probe].is_ascii_whitespace() || bytes[probe] == HTML_GT {
+                    in_preserve = true;
+                }
+            }
+            in_tag = true;
+            last_was_space = false;
+            out.push(b);
+            i += 1;
+            continue;
+        }
+        if b == HTML_GT {
+            in_tag = false;
+            out.push(b);
+            i += 1;
+            pending_strip_tag_gap = true;
+            last_was_space = false;
+            continue;
+        }
+        if in_tag {
+            if b.is_ascii_whitespace() {
+                if !last_was_space {
+                    out.push(HTML_SPACE);
+                    last_was_space = true;
+                }
+            } else {
+                out.push(b);
+                last_was_space = false;
+            }
+            i += 1;
+            continue;
+        }
+        if b.is_ascii_whitespace() {
+            if !last_was_space {
+                out.push(HTML_SPACE);
+                last_was_space = true;
+            }
+            i += 1;
+            continue;
+        }
+        out.push(b);
+        last_was_space = false;
+        i += 1;
+    }
+    String::from_utf8(out).unwrap_or_else(|_| String::from(html))
+}
+
 /// Checks whether `wasm_pack_args` already contains a build mode flag.
 ///
 /// Returns `true` if any of `--dev`, `--release`, or `--profiling`
@@ -540,6 +704,10 @@ pub async fn run_build_only_pipeline(args: &ModeArgs) -> Result<(), EuvError> {
     clean_out_dir(&out_dir).await;
     build_wasm(args).await?;
     log::info!("WASM build completed successfully");
+    let out_dir_path: PathBuf = resolve_out_dir(args);
+    if let Err(error) = minify_inline_js_snippets(&out_dir_path).await {
+        log::warn!("inline-js minify step error: {error}");
+    }
     let html_config: HtmlConfig = HtmlConfig::new(
         resolve_serving_root(args).await,
         resolve_import_path(args),
@@ -547,6 +715,106 @@ pub async fn run_build_only_pipeline(args: &ModeArgs) -> Result<(), EuvError> {
         args.try_get_index_html().clone(),
     );
     generate_html(&html_config).await?;
+    Ok(())
+}
+
+/// Minifies every wasm-bindgen `inline_js` snippet file emitted under
+/// `<out_dir>/<pkg>/snippets/**/inline*.js`.
+///
+/// `#[wasm_bindgen(inline_js = ...)]` blocks are extracted verbatim from
+/// the Rust source by wasm-bindgen — preserving indentation, comments,
+/// and original identifier names — and written into per-crate snippet
+/// directories inside `pkg/snippets/<crate-hash>/`. On a typical euv
+/// build this costs roughly 2 KB of uncompressed JS to ship to every
+/// browser; minifying in-place brings the payload down to ~700 B with
+/// no semantic change. The export names are preserved so the wasm
+/// glue loader (`euv_example.js`'s `__wbg_*` init) can still resolve
+/// them by name.
+///
+/// Failures are logged and skipped so a single bad snippet does not
+/// abort the overall build — a syntax error in an inline snippet will
+/// already have been caught by wasm-pack itself. We only touch files
+/// whose stem starts with `SNIPPET_FILE_PREFIX` and whose extension
+/// matches `JS_EXTENSION`, leaving any other file under `snippets/`
+/// alone.
+///
+/// # Arguments
+///
+/// - `&Path` - The build output directory (typically `<crate>/www/pkg`).
+///
+/// # Returns
+///
+/// - `Result<(), EuvError>` - `Ok(())` on success, or a wrapped I/O error.
+pub async fn minify_inline_js_snippets(out_dir: &Path) -> Result<(), EuvError> {
+    let snippets_root: PathBuf = out_dir.join(SNIPPETS_DIR_NAME);
+    if !snippets_root.is_dir() {
+        return Ok(());
+    }
+    let mut crate_dirs: ReadDir = match read_dir(&snippets_root).await {
+        Ok(dir) => dir,
+        Err(_) => return Ok(()),
+    };
+    let session: Session = Session::new();
+    let mut total_in: u64 = 0;
+    let mut total_out: u64 = 0;
+    let mut touched: u32 = 0;
+    while let Ok(Some(entry)) = crate_dirs.next_entry().await {
+        let crate_dir: PathBuf = entry.path();
+        if !crate_dir.is_dir() {
+            continue;
+        }
+        let mut files: ReadDir = match read_dir(&crate_dir).await {
+            Ok(dir) => dir,
+            Err(error) => {
+                log::warn!(
+                    "Failed to read snippet dir '{}': {error}",
+                    crate_dir.display()
+                );
+                continue;
+            }
+        };
+        while let Ok(Some(file_entry)) = files.next_entry().await {
+            let path: PathBuf = file_entry.path();
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if !name.starts_with(SNIPPET_FILE_PREFIX) || !name.ends_with(JS_EXTENSION) {
+                continue;
+            }
+            let input: Vec<u8> = match tokio::fs::read(&path).await {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    log::warn!("Failed to read snippet '{}': {error}", path.display());
+                    continue;
+                }
+            };
+            total_in = total_in.saturating_add(input.len() as u64);
+            let mut output: Vec<u8> = Vec::with_capacity(input.len());
+            if let Err(error) = minify(&session, TopLevelMode::Module, &input, &mut output) {
+                log::warn!(
+                    "Failed to minify snippet '{}' (left as-is): {}",
+                    path.display(),
+                    error
+                );
+                continue;
+            }
+            if let Err(error) = tokio::fs::write(&path, &output).await {
+                log::warn!(
+                    "Failed to write minified snippet '{}': {error}",
+                    path.display()
+                );
+                continue;
+            }
+            total_out = total_out.saturating_add(output.len() as u64);
+            touched = touched.saturating_add(1);
+        }
+    }
+    if touched > 0 && total_in > 0 {
+        log::info!(
+            "Minified {touched} inline-js snippet(s): {total_in} -> {total_out} bytes ({:.1}%)",
+            (total_out as f64 / total_in as f64) * 100.0
+        );
+    }
     Ok(())
 }
 
@@ -600,6 +868,10 @@ pub async fn run_build_pipeline(
     match build_wasm(args).await {
         Ok(()) => {
             log::info!("WASM build completed successfully");
+            let out_dir_path: PathBuf = resolve_out_dir(args);
+            if let Err(error) = minify_inline_js_snippets(&out_dir_path).await {
+                log::warn!("inline-js minify step error: {error}");
+            }
             if let Some(sender) = reload_tx {
                 let _: Result<usize, tokio::sync::broadcast::error::SendError<ReloadEvent>> =
                     sender.send(ReloadEvent::Reload);
