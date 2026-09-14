@@ -12,8 +12,10 @@ mod logger;
 mod mode;
 mod server;
 
-use log::SetLoggerError;
+pub use {build::*, error::*, fmt::*, hmr::*, logger::*, mode::*, server::*};
+
 pub use minify_js::{Session, TopLevelMode, minify};
+
 pub use std::{
     error::Error,
     ffi::OsStr,
@@ -21,7 +23,6 @@ pub use std::{
     io::Error as IoError,
     string::FromUtf8Error,
 };
-pub use {build::*, error::*, fmt::*, hmr::*, logger::*, mode::*, server::*};
 
 use std::{
     collections::HashMap,
@@ -41,6 +42,7 @@ use {
     color_output::*,
     hyperlane::*,
     ignore::gitignore::{Gitignore, GitignoreBuilder},
+    log::SetLoggerError,
     lombok_macros::*,
     notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher},
     qrcode::{QrCode, render::unicode::Dense1x2},
